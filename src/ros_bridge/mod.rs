@@ -1,21 +1,25 @@
+mod ros1_bridge;
+mod ros2_bridge;
 mod ros_bridge_error;
+mod ros_bridge_trait;
+
 use std::pin::Pin;
 
 use bytes::Bytes;
-pub use ros_bridge_error::RosBridgeError;
 
 pub type OnCameraImageHdlrFn =
     Box<dyn (FnMut(&Bytes) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync>;
 
-#[cfg(feature = "ros1")]
-mod ros1_bridge;
-#[cfg(feature = "ros1")]
-pub use ros1_bridge::RosBridge;
+pub mod ros1_messages {
+    include!(concat!(env!("OUT_DIR"), "/ros1_messages.rs"));
+}
 
-#[cfg(feature = "ros2")]
-mod ros2_bridge;
-#[cfg(feature = "ros2")]
-pub use ros2_bridge::RosBridge;
+pub mod ros2_messages {
+    include!(concat!(env!("OUT_DIR"), "/ros2_messages.rs"));
+}
 
-#[cfg(all(feature = "ros1", feature = "ros2"))]
-compile_error!("select only one ros feature for RosBridge");
+pub use ros_bridge_error::RosBridgeError;
+
+pub use ros_bridge_trait::RosBridge;
+pub use ros1_bridge::Ros1Bridge;
+pub use ros2_bridge::Ros2Bridge;

@@ -6,8 +6,8 @@ use gstreamer::{
     glib::object::Cast,
     prelude::{ElementExt, GstBinExt},
 };
-use gstreamer_app::{self as gst_app, AppSink, AppSrc};
-use log::{debug, info};
+use gstreamer_app::{self as gst_app, AppSinkCallbacks, AppSrc};
+use log::info;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -32,8 +32,6 @@ pub enum VideoPipelineError {
     GStreamerStopFailure,
     #[error("Invalid state for requested operation")]
     InvalidStateError,
-    #[error("Failed to retrieve frame from GStreamer sink")]
-    FrameRetrievalError,
 }
 
 pub struct VideoPipeline {
@@ -55,7 +53,7 @@ impl VideoPipeline {
         info!("Initialising GStreamer");
         gst::init().map_err(|_| VideoPipelineError::GStreamerInitFailure)?;
 
-        info!("Launching pipeline");
+        info!("Launching GStreamer pipeline");
         let pipeline = gst::parse::launch(
             "appsrc name=src ! videoconvert ! x264enc tune=zerolatency key-int-max=30 byte-stream=true ! video/x-h264,stream-format=byte-stream,profile=baseline ! appsink name=sink",
         ).map_err(|_| VideoPipelineError::GStreamerParseError)?;
@@ -77,6 +75,11 @@ impl VideoPipeline {
             .map_err(|_| VideoPipelineError::GStreamerDowncastFailure)?;
         src.set_caps(Some(&caps));
 
+        // TODO: experiment with these and callbacks to prevent too much data
+        // going in to the pipeline
+        // src.set_property("is-live", true);
+        // src.set_property("block", true);
+
         // Store app source for pushing frames later
         self.appsrc.lock().await.replace(src);
 
@@ -86,8 +89,36 @@ impl VideoPipeline {
             .downcast::<gst_app::AppSink>()
             .unwrap();
         let sink = Arc::new(sink);
-        debug!("Starting to listen for frames");
-        tokio::spawn(loop_reading_frames(sink, self.frame_listeners.clone()));
+
+        // Create a channel for tokio to listen to
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Bytes>(10);
+        let listeners_clone = Arc::clone(&self.frame_listeners);
+        tokio::spawn(async move {
+            while let Some(buffer) = frame_rx.recv().await {
+                for listener in listeners_clone.lock().await.iter_mut() {
+                    listener(&buffer).await;
+                }
+            }
+        });
+
+        sink.set_callbacks(
+            AppSinkCallbacks::builder()
+                .new_sample(move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample
+                        .buffer()
+                        .expect("Error while retrieving buffer from frame!");
+                    let map = buffer
+                        .map_readable()
+                        .expect("Error mapping readable data from frame buffer!");
+                    let data = Bytes::from(map.to_vec());
+                    frame_tx
+                        .blocking_send(data)
+                        .expect("Error sending video frame to channel!");
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
 
         pipeline
             .set_state(gst::State::Playing)
@@ -103,14 +134,12 @@ impl VideoPipeline {
     }
 
     pub async fn queue_frame(&self, frame: &[u8]) -> Result<(), VideoPipelineError> {
+        let buffer = gst::Buffer::from_slice(frame.to_vec());
         if let Some(src) = self.appsrc.lock().await.as_mut() {
-            let buffer = gst::Buffer::from_slice(frame.to_vec());
             src.push_buffer(buffer)
                 .map_err(|_| VideoPipelineError::GStreamerBufferPushError)?;
-            Ok(())
-        } else {
-            Err(VideoPipelineError::InvalidStateError)
         }
+        Ok(())
     }
 
     pub async fn stop_pipeline(&self) -> Result<(), VideoPipelineError> {
@@ -123,30 +152,5 @@ impl VideoPipeline {
             }
             None => Err(VideoPipelineError::InvalidStateError),
         }
-    }
-}
-
-async fn loop_reading_frames(
-    sink: Arc<AppSink>,
-    listeners: Arc<Mutex<Vec<OnFrameReadyHandlerFn>>>,
-) -> Result<(), VideoPipelineError> {
-    loop {
-        if let Ok(sample) = sink.pull_sample() {
-            let buffer = sample
-                .buffer()
-                .ok_or(VideoPipelineError::FrameRetrievalError)?;
-            let map = buffer
-                .map_readable()
-                .map_err(|_| VideoPipelineError::FrameRetrievalError)?;
-            let data = Bytes::from(map.to_vec());
-
-            // Call all listeners with new frame
-            for listener in listeners.lock().await.iter_mut() {
-                listener(&data).await;
-            }
-        }
-
-        // Prevent busy-waiting
-        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
     }
 }
