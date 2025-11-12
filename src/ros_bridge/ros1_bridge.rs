@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use log::{debug, error};
 use rosrust::{Publisher, Subscriber};
-use std::pin::Pin;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -13,7 +12,7 @@ use crate::{
 
 pub struct RosBridge {
     _image_sub: Subscriber,
-    image_listeners: Arc<Mutex<Vec<RosBridgeOnFrameCallback>>>,
+    image_listeners: Arc<Mutex<Vec<OnCameraImageHdlrFn>>>,
     mvmt_pub: Publisher<rosrust_msg::geometry_msgs::Twist>,
 }
 
@@ -25,7 +24,6 @@ impl RosBridge {
 
         let (tx, mut rx) = mpsc::channel::<Bytes>(10);
 
-        let listeners_clone = Arc::clone(image_listeners);
         let image_sub = rosrust::subscribe(
             "/camera/image_raw",
             1,

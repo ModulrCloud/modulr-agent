@@ -16,6 +16,8 @@ gstreamer = "0.24.2"
 gstreamer-app = "0.24.2"
 bytes = "1.10.1"
 thiserror = "2.0.17"
+env_logger = "0.11.8"
+log = "0.4.28"
 
 # ROS 1 dependencies
 rosrust = { version = "0.9.12", optional = true }
@@ -26,8 +28,6 @@ rclrs = { version = "*", optional = true }
 geometry_msgs = { version = "*", optional = true }
 sensor_msgs = { version = "*", optional = true }
 std_msgs = { version = "*", optional = true }
-env_logger = "0.11.8"
-log = "0.4.28"
 
 [features]
 default = ["ros2"]

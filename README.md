@@ -21,19 +21,20 @@ Finally, ROS is required. ROS 1 and ROS 2 are both supported.
 
 Follow the installation instructions here: https://wiki.ros.org/noetic/Installation/Ubuntu
 
+Unfortunately, dependency management is difficult with this package due to its dependency on `ros2rust`, which requires the packages to be built locally. To make this package easier to compile, open `Cargo.toml` and remove the `ros2` feature and the dependencies listed for ROS 2. Also set the default features to ros1.
+
 Then, build the package by running:
 
 ```bash
-cargo build --features ros1 --no-default-features
+source /opt/ros/noetic/setup.bash
+cargo build
 ```
 
 You can run the package with logging enabled using:
 
 ```bash
-RUST_LOG=debug cargo run --features ros1 --no-default-features
+RUST_LOG=debug cargo run
 ```
-
-*Alternatively, edit the Cargo.toml file such that ros1 is the default feature, then run without any of the --features or --no-default-features flags.*
 
 ## ROS 2
 
