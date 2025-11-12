@@ -2,6 +2,16 @@
 
 This package contains the agent to be installed on any robot connecting to the Modulr infrastructure.
 
+## Cloning the Package
+
+Use the following command to clone the package:
+
+```bash
+git clone --recurse-submodules https://github.com/ModulrCloud/modulr-agent
+# If already cloned and you need to checkout the submodules:
+git submodule update --init --recursive
+```
+
 ## Building the Package
 
 This package has only been tested on Ubuntu systems. To build the package, you will need to install Rust: https://rustup.rs/
@@ -15,71 +25,64 @@ sudo apt install -y  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
       gstreamer1.0-libav libgstrtspserver-1.0-dev libges-1.0-dev
 ```
 
-Finally, ROS is required. ROS 1 and ROS 2 are both supported.
+Finally, ROS is required. ROS 1 and ROS 2 are both supported. For ROS1, install Noetic as per [these installation instructions](https://wiki.ros.org/noetic/Installation/Ubuntu). For ROS2, we recommend using Kilted as the latest release ([installation instructions](https://docs.ros.org/en/kilted/Installation/Ubuntu-Install-Debs.html)), but earlier distros should also work.
 
-## ROS 1
-
-Follow the installation instructions here: https://wiki.ros.org/noetic/Installation/Ubuntu
-
-Unfortunately, dependency management is difficult with this package due to its dependency on `ros2rust`, which requires the packages to be built locally. To make this package easier to compile, open `Cargo.toml` and remove the `ros2` feature and the dependencies listed for ROS 2. Also set the default features to ros1.
-
-Then, build the package by running:
+In addition to base ROS, a websocket bridge server is required:
 
 ```bash
-source /opt/ros/noetic/setup.bash
+sudo apt install ros-$ROS_DISTRO-rosbridge-suite
+```
+
+Build the package as follows:
+
+```bash
+# Replace $ROS_DISTRO with the installed version of ROS
+source /opt/ros/$ROS_DISTRO/setup.bash
+# For debug mode:
 cargo build
+# For release mode:
+cargo build --release
 ```
 
-You can run the package with logging enabled using:
+The agent relies on rosbridge to relay ROS traffic. Run rosbridge as follows:
 
 ```bash
-RUST_LOG=debug cargo run
+# ROS 1
+roslaunch rosbridge_server rosbridge_websocket.launch
+# ROS 2
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
 
-## ROS 2
-
-Follow the installation instructions here: https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
-
-Note that any distro of ROS 2 should be compatible, but only Jazzy has been tested so far.
-
-Some extra installation is required for Rust-related build tooling:
+You can then run the agent using the following:
 
 ```bash
-sudo apt install -y git libclang-dev python3-pip python3-vcstool
-pip install git+https://github.com/colcon/colcon-cargo.git --break-system-packages
-pip install git+https://github.com/colcon/colcon-ros-cargo.git --break-system-packages
+# For debug mode:
+cargo run
+# For release mode:
+cargo run --release
+# To enable logging, set the following to your desired log level:
+RUST_LOG=modulr_agent=debug cargo run # --release
 ```
 
-Create a ROS 2 workspace for the package:
+## Running in Simulation
+
+If not running on a real robot, you can test the system using a Turtlebot simulation. Install the turtlebot simulator using:
 
 ```bash
-mkdir -p ~/modulr_ws/src
-cd ~/modulr_ws
-git clone <this repo> src/modulr_agent
-vcs import src < src/modulr_agent/ros2rust.repos
-# Change the following line depending on your installed version of ROS 2
-vcs import src < src/ros2_rust/ros2_rust_jazzy.repos
+sudo apt install ros-$ROS_DISTRO-turtlebot3-simulations
 ```
 
-Build the package (first time command):
+The simulator can then be run using:
 
 ```bash
-cd ~/modulr_ws
-colcon build
-source install/setup.bash
+export TURTLEBOT3_MODEL=waffle_pi
+# ROS 1
+roslaunch turtlebot3_gazebo turtlebot3_world.launch
+# ROS 2
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 ```
 
-Build the package (subsequent calls):
+The robot should then be driveable using the agent.
 
-```bash
-cd ~/modulr_ws
-colcon build --packages-select modulr_agent
-```
+*Note that at present, all topics are hard-coded. You may need to check that the simulation is producing images on `/camera/image_raw` and adjust the source code if not. Similarly, the simulation may use Twist or TwistStamped messages for velocity commands, so if movement is not working, double-check the message type.*
 
-Run the package with debug logging:
-
-```bash
-RUST_LOG=debug ./install/modulr_agent/bin/modulr_agent
-```
-
-*Note that cargo commands should be enabled, including cargo build and cargo run, but these did not work on the first system. It is a TODO to fix this build issue.*
