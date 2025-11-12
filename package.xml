@@ -1,0 +1,16 @@
+<package format="3">
+  <name>modulr_agent</name>
+  <version>0.1.0</version>
+  <description></description>
+  <maintainer email="michael@modulr.cloud">Michael Hart</maintainer>
+  <license>MIT-0</license>
+
+  <depend>rclrs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_cargo</build_type>
+  </export>
+</package>
