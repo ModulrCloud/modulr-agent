@@ -2,6 +2,8 @@ use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
+use rustls::client::{ServerCertVerified, ServerCertVerifier};
+use rustls::{ClientConfig, RootCertStore};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,7 +11,9 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+};
 use tungstenite::Message;
 use webrtc::api::APIBuilder;
 use webrtc::api::media_engine::{MIME_TYPE_H264, MediaEngine};
@@ -36,6 +40,27 @@ type MaybeWebSocketReader =
 pub type OnWebRtcMessageHdlrFn = Box<
     dyn (FnMut(&WebRtcMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
 >;
+
+fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
+    #[derive(Debug)]
+    struct InsecureVerifier;
+
+    impl ServerCertVerifier for InsecureVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::Certificate,
+            _intermediates: &[rustls::Certificate],
+            _server_name: &rustls::ServerName,
+            _scts: &mut dyn Iterator<Item = &[u8]>,
+            _ocsp_response: &[u8],
+            _now: std::time::SystemTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+    }
+
+    Arc::new(InsecureVerifier)
+}
 
 #[derive(Debug, PartialEq)]
 pub enum WebRtcLinkStatus {
@@ -83,6 +108,7 @@ pub struct WebRtcLink {
     status: Arc<Mutex<WebRtcLinkStatus>>,
     local_id: String,
     signaling_url: String,
+    allow_skip_cert_check: bool,
 
     // Can be added to after link creation
     message_listeners: Arc<Mutex<Vec<OnWebRtcMessageHdlrFn>>>,
@@ -98,11 +124,12 @@ pub struct WebRtcLink {
 }
 
 impl WebRtcLink {
-    pub fn new(id: &str, url: &str) -> Self {
+    pub fn new(id: &str, url: &str, allow_skip_cert_check: bool) -> Self {
         Self {
             status: Arc::new(Mutex::new(WebRtcLinkStatus::Disconnected)),
             local_id: id.to_string(),
             signaling_url: url.to_string(),
+            allow_skip_cert_check,
             message_listeners: Arc::new(Mutex::new(vec![])),
             ws_write: Arc::new(Mutex::new(None)),
             ws_read: Arc::new(Mutex::new(None)),
@@ -118,9 +145,24 @@ impl WebRtcLink {
 
     pub async fn try_connect(&mut self) -> Result<(), WebRtcLinkError> {
         info!("Connecting to WebRTC server at {}", self.signaling_url);
-        let (ws_stream, _) = connect_async(&self.signaling_url)
-            .await
-            .map_err(|_| WebRtcLinkError::ConnectionAttemptFailed)?;
+
+        let mut config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+
+        if self.allow_skip_cert_check {
+            config
+                .dangerous()
+                .set_certificate_verifier(insecure_verifier());
+        }
+
+        let connector = Connector::Rustls(Arc::new(config));
+
+        let (ws_stream, _) =
+            connect_async_tls_with_config(&self.signaling_url, None, false, Some(connector))
+                .await
+                .map_err(|_| WebRtcLinkError::ConnectionAttemptFailed)?;
         let (ws_write, ws_read) = ws_stream.split();
 
         debug!("Adding default codecs to WebRTC offer");
