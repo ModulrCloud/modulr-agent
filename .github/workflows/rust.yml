@@ -1,0 +1,54 @@
+name: Modulr Agent Build & Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, armv7-unknown-linux-gnueabihf]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v2
+        with:
+          rust-version: stable
+
+      - name: Add target for cross-compilation
+        run: rustup target add ${{ matrix.arch }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            libgstrtspserver-1.0-dev \
+            libges-1.0-dev
+
+      - name: Build project
+        run: |
+          echo "Building for target: ${{ matrix.arch }}"
+          cargo build --release --target ${{ matrix.arch }}
+
+      - name: Run tests
+        if: matrix.arch == 'x86_64-unknown-linux-gnu'
+        run: cargo test --release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-${{ matrix.arch }}
+          path: target/${{ matrix.arch }}/release/
