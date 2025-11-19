@@ -27,7 +27,7 @@ sudo apt install -y  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 
 Finally, ROS is required. ROS 1 and ROS 2 are both supported. For ROS1, install Noetic as per [these installation instructions](https://wiki.ros.org/noetic/Installation/Ubuntu). For ROS2, we recommend using Kilted as the latest release ([installation instructions](https://docs.ros.org/en/kilted/Installation/Ubuntu-Install-Debs.html)), but earlier distros should also work.
 
-In addition to base ROS, a websocket bridge server is required:
+In addition to base ROS, a websocket bridge server is required for ROS 2 only:
 
 ```bash
 sudo apt install ros-$ROS_DISTRO-rosbridge-suite
@@ -44,24 +44,52 @@ cargo build
 cargo build --release
 ```
 
-The agent relies on rosbridge to relay ROS traffic. Run rosbridge as follows:
+## Running the Agent
+
+### Dependencies
+
+The agent for ROS 2 relies on rosbridge to relay ROS traffic. Run rosbridge as follows:
 
 ```bash
-# ROS 1
-roslaunch rosbridge_server rosbridge_websocket.launch
-# ROS 2
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
+
+### Commands
+
+For all `cargo run` commands, you can add `--release` for release mode (debug mode is default), and use `--` before passing arguments to ensure that all arguments are passed into the agent, rather than the cargo process. For example, use `cargo run --release -- --help` for the help command.
+
+The following commands are available:
+
+```bash
+Usage: modulr_agent [OPTIONS] <COMMAND>
+
+Commands:
+  initial-setup  First-time setup. Discovers ROS installation and topics, and initialises token exchange mechanism with Modulr services
+  start          Starts the main agent running
+  config-path    Prints out the default config path for this application
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+  -v...          Set logging verbosity level. 1 = WARN, 2 = INFO, 3 = DEBUG, 4 = TRACE e.g. `agent run -vvvv config-path` sets the verbosity level to TRACE
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+For first-time setup, use the initial-setup command:
+
+```bash
+# Replace ROBOT_ID and SIGNALING_URL with your chosen values
+cargo run -- initial-setup --robot-id ROBOT_ID --signaling-url SIGNALING_URL
+```
+
+This will perform first-time setup and save required values into a config file. You can override this file path or leave it as the default (`cargo run -- config-path` will get the default file path).
 
 You can then run the agent using the following:
 
 ```bash
-# For debug mode:
-cargo run
-# For release mode:
-cargo run --release
-# To enable logging, set the following to your desired log level:
-RUST_LOG=modulr_agent=debug cargo run # --release
+cargo run -- start
+# To enable logging, use the verbosity flags, e.g. for debug logging:
+cargo run -- -vvv start
 ```
 
 ## Running in Simulation
@@ -85,4 +113,3 @@ ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 The robot should then be driveable using the agent.
 
 *Note that at present, all topics are hard-coded. You may need to check that the simulation is producing images on `/camera/image_raw` and adjust the source code if not. Similarly, the simulation may use Twist or TwistStamped messages for velocity commands, so if movement is not working, double-check the message type.*
-
