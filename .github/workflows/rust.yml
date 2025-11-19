@@ -45,11 +45,15 @@ jobs:
             libgstrtspserver-1.0-dev \
             libges-1.0-dev
 
-      - name: Install cross-compiler for aarch64
+      - name: Install cross pkg-config and ARM64 dev libs
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            pkg-config-aarch64-linux-gnu
+          echo "PKG_CONFIG=aarch64-linux-gnu-pkg-config" >> $GITHUB_ENV
 
       - name: Add target if needed
         run: rustup target add ${{ matrix.target }}
