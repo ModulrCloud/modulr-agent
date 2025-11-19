@@ -92,6 +92,51 @@ cargo run -- start
 cargo run -- -vvv start
 ```
 
+## Developer Signaling Server
+
+In addition to running the Robot Teleapp webapp at https://github.com/ModulrCloud/robot-teleop-webapp, the `scripts` folder provides a local signaling server for testing robot connections. Note that this doesn't expose the server to the internet (without further user configuration), so only robots on the same LAN will be able to access it.
+
+Python with virtualenv is recommended to run the server. To install dependencies and create certificates on Ubuntu:
+
+```bash
+sudo apt install -y python3-virtualenv
+cd scripts
+virtualenv venv
+source venv/bin/activate
+pip install -r requirements.txt
+./make_creds.sh
+```
+
+After creating the certificates, your OS will need to trust that certificate before you can connect using it. On Windows, this means following the steps [in this guide](https://learn.microsoft.com/en-us/skype-sdk/sdn/articles/installing-the-trusted-root-certificate).
+
+Linux can accomplish the same using these commands:
+
+```bash
+sudo cp certs/dev-root-ca.pem /usr/local/share/ca-certificates/dev-root-ca.crt
+sudo update-ca-certificates
+```
+
+Once the CA has been added, run the signaling server:
+
+```bash
+python signaling_server.py
+```
+
+You can test a connection by sourcing the virtual environment in another terminal and running:
+
+```bash
+python test_signaling_server.py
+```
+
+Check the logs of the signaling server to see that a robot with ID robot1 has connected and disconnected. If this is successful, use your local IP address as the signaling server for both your robot and the teleop webapp. The address is `wss://<your ip>:8765`, e.g. `wss://192.168.0.200:8765`. The argument `--allow-skip-cert-check` will also need to be passed to the robot. For example:
+
+```bash
+# Set the new signaling server URL to a test config
+cargo run -- initial-setup --config-override ./test_config.json --robot-id testrobot --signaling-url wss://192.168.0.200:8765
+# Run the agent, skipping the security checks
+cargo run -- -vvv start --config-override ./test_config.json --allow-skip-cert-check
+```
+
 ## Running in Simulation
 
 If not running on a real robot, you can test the system using a Turtlebot simulation. Install the turtlebot simulator using:
