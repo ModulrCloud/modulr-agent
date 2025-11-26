@@ -226,8 +226,12 @@ impl WebRtcLink {
 
         // On connection state Connected, update our own connected state
         let status_clone = Arc::clone(&self.status);
+        let robot_id = self.local_id.clone();
         peer_connection.on_ice_connection_state_change(Box::new(move |state| {
             info!("ICE connection state changed: {:?}", state);
+            if state == RTCIceConnectionState::Connected {
+                info!("✅ WebRTC connection established! Robot {} is now connected.", robot_id);
+            }
 
             let status_clone = Arc::clone(&status_clone);
             Box::pin(async move {
@@ -293,6 +297,7 @@ impl WebRtcLink {
 
             // Assume registration was successful, as no feedback from server yet
             *self.status.lock().await = WebRtcLinkStatus::Registered;
+            info!("Registered with signaling server as robot: {}", self.local_id);
         }
 
         // Start listening for messages from the server
