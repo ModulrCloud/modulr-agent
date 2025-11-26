@@ -10,7 +10,11 @@ if [ -z "$ROS_DISTRO" ]; then
     if [ -f /opt/ros/humble/setup.bash ]; then
         source /opt/ros/humble/setup.bash
         export ROS_DISTRO=humble
+    elif [ -f /opt/ros/jazzy/setup.bash ]; then
+        source /opt/ros/jazzy/setup.bash
+        export ROS_DISTRO=jazzy
     elif [ -f /opt/ros/jade/setup.bash ]; then
+        # Legacy check for jade (shouldn't exist, but just in case)
         source /opt/ros/jade/setup.bash
         export ROS_DISTRO=jade
     else

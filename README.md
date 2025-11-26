@@ -206,4 +206,8 @@ If you prefer to run components separately:
 
 The camera node publishes images to `/camera/image_raw`, which matches what the agent expects. The agent will publish movement commands to `/cmd_vel` (though these won't have any effect without a robot to control).
 
-For more details, troubleshooting, and camera configuration options, see `scripts/ROS2_SETUP_GUIDE.md`.
+For more details, troubleshooting, and camera configuration options, see:
+- **Ubuntu 24.04.3 users:** `scripts/UBUNTU_24_04_SETUP.md` (tailored specifically for Ubuntu 24.04 with ROS2 Jazzy)
+- **General setup:** `scripts/ROS2_SETUP_GUIDE.md` or `scripts/FRESH_SETUP_GUIDE.md`
+
+**Note:** Server URL and robot ID are only required when running the agent (with `initial-setup` and `start` commands), not for building. You can build and test the camera node first, then get the credentials from your administrator.

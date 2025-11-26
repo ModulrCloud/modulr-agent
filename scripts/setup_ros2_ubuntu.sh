@@ -18,8 +18,8 @@ if [[ "$UBUNTU_VERSION" == "22.04" ]]; then
     ROS_DISTRO="humble"
     echo "Using ROS2 Humble (recommended for Ubuntu 22.04)"
 elif [[ "$UBUNTU_VERSION" == "24.04" ]]; then
-    ROS_DISTRO="jade"
-    echo "Using ROS2 Jade (recommended for Ubuntu 24.04)"
+    ROS_DISTRO="jazzy"
+    echo "Using ROS2 Jazzy (recommended for Ubuntu 24.04)"
 else
     echo "Warning: Ubuntu version $UBUNTU_VERSION detected."
     echo "Defaulting to ROS2 Humble. You may need to adjust this."

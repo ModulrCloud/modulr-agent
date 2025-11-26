@@ -91,7 +91,7 @@ sudo rosdep init
 rosdep update
 ```
 
-**For Ubuntu 24.04 (use ROS2 Jade):**
+**For Ubuntu 24.04 (use ROS2 Jazzy - note: Jazzy, not Jade):**
 
 ```bash
 # Update system packages
@@ -100,19 +100,23 @@ sudo apt update && sudo apt upgrade -y
 # Install prerequisites
 sudo apt install -y software-properties-common curl gnupg lsb-release
 
+# Ensure Universe repository is enabled
+sudo add-apt-repository universe
+sudo apt update
+
 # Add ROS2 repository
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(source /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2-latest.list > /dev/null
 
-# Install ROS2 Jade Desktop
+# Install ROS2 Jazzy Desktop (Jazzy is the correct name for Ubuntu 24.04)
 sudo apt update
-sudo apt install -y ros-jade-desktop
+sudo apt install -y ros-jazzy-desktop
 
 # Install development tools
 sudo apt install -y python3-rosdep python3-colcon-common-extensions ros-dev-tools
 
 # Initialize rosdep (only needed once)
-sudo rosdep init
+sudo rosdep init 2>/dev/null || echo "rosdep already initialized"
 rosdep update
 ```
 
@@ -127,9 +131,9 @@ Add ROS2 to your shell configuration so it's available every time you open a ter
 echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 echo "export ROS_DISTRO=humble" >> ~/.bashrc
 
-# OR for ROS2 Jade (Ubuntu 24.04)
-# echo "source /opt/ros/jade/setup.bash" >> ~/.bashrc
-# echo "export ROS_DISTRO=jade" >> ~/.bashrc
+# OR for ROS2 Jazzy (Ubuntu 24.04) - NOTE: Jazzy, not Jade!
+# echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+# echo "export ROS_DISTRO=jazzy" >> ~/.bashrc
 
 # Reload your shell configuration
 source ~/.bashrc
@@ -190,6 +194,8 @@ cd modulr-agent
 
 ### Step 9: Build the Modulr Agent
 
+**Important:** The build does NOT require server URL or robot ID. Those are only needed when you run the agent (Step 14).
+
 ```bash
 # Make sure ROS2 is sourced
 source /opt/ros/$ROS_DISTRO/setup.bash
@@ -202,6 +208,8 @@ cargo build
 ```
 
 This will take several minutes the first time as it downloads and compiles all dependencies.
+
+**If build succeeds:** You're good! The server URL and robot ID are only needed later when you run the agent.
 
 ---
 
@@ -309,18 +317,33 @@ python3 scripts/camera_node.py
 You should see camera node output.
 
 **Terminal 3 - Run the Modulr Agent:**
+
+**Note:** You need the server URL and robot ID from Alex for this step. If you don't have them yet, you can still test that rosbridge and camera are working (see "Testing Without Credentials" below).
+
 ```bash
 source /opt/ros/$ROS_DISTRO/setup.bash
 cd ~/modulr-agent
 
-# First-time setup (replace with your values)
-cargo run -- initial-setup --robot-id my_laptop_robot --signaling-url wss://your-signaling-server:8765
+# First-time setup (replace with values from Alex)
+cargo run -- initial-setup --robot-id YOUR_ROBOT_ID --signaling-url wss://YOUR_SERVER_URL:8765
 
 # Then start the agent
 cargo run -- start
 
 # Or with verbose logging
 cargo run -- -vvv start
+```
+
+**Testing Without Credentials:** If you don't have the server URL and robot ID yet, you can still verify everything is working by checking that topics are published:
+
+```bash
+# In Terminal 3, just verify topics exist:
+source /opt/ros/$ROS_DISTRO/setup.bash
+ros2 topic list
+# Should show: /camera/image_raw
+
+ros2 topic echo /camera/image_raw --once
+# This will show image data, confirming the camera node is working
 ```
 
 ### Alternative: Use the Convenience Script

@@ -32,9 +32,9 @@ echo -n "Checking ROS2... "
 if [ -f /opt/ros/humble/setup.bash ]; then
     echo "✓ INSTALLED (Humble)"
     ROS_DISTRO="humble"
-elif [ -f /opt/ros/jade/setup.bash ]; then
-    echo "✓ INSTALLED (Jade)"
-    ROS_DISTRO="jade"
+elif [ -f /opt/ros/jazzy/setup.bash ]; then
+    echo "✓ INSTALLED (Jazzy)"
+    ROS_DISTRO="jazzy"
 elif [ -f /opt/ros/foxy/setup.bash ]; then
     echo "✓ INSTALLED (Foxy)"
     ROS_DISTRO="foxy"
