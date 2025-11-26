@@ -6,6 +6,7 @@ Publishes camera images to /camera/image_raw topic
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
@@ -18,8 +19,15 @@ class CameraNode(Node):
     def __init__(self, camera_index=0, frame_rate=30):
         super().__init__('camera_publisher')
         
-        # Create publisher for camera images
-        self.publisher = self.create_publisher(Image, '/camera/image_raw', 10)
+        # Create publisher for camera images with Reliable QoS
+        # This ensures compatibility with rosbridge_server which expects Reliable QoS
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE
+        )
+        self.publisher = self.create_publisher(Image, '/camera/image_raw', qos_profile)
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
