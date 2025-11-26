@@ -35,15 +35,28 @@ pub fn write_config(config: &AgentConfig, override_path: Option<PathBuf>) -> Res
     let config_path = override_path.or(get_default_path()).ok_or(anyhow::anyhow!(
         "No configuration file provided and default file path cannot be built!"
     ))?;
+    
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            anyhow::anyhow!(
+                "Unable to create config directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    
     std::fs::write(
         &config_path,
         serde_json::to_string_pretty(config)
             .map_err(|_| anyhow::anyhow!("Unable to serialize configuration for writing!"))?,
     )
-    .map_err(|_| {
+    .map_err(|e| {
         anyhow::anyhow!(
-            "Unable to write config to file path: {}",
-            &config_path.display()
+            "Unable to write config to file path {}: {}",
+            &config_path.display(),
+            e
         )
     })
 }
