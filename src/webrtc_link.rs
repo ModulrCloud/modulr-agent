@@ -151,7 +151,8 @@ impl WebRtcLink {
                 .with_safe_defaults()
                 .with_root_certificates(RootCertStore::empty())
                 .with_no_client_auth()
-                .with_custom_certificate_verifier(insecure_verifier());
+                .dangerous()
+                .set_certificate_verifier(insecure_verifier());
             Some(Connector::Rustls(Arc::new(config)))
         } else {
             None
