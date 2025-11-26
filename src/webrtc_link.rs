@@ -149,10 +149,8 @@ impl WebRtcLink {
         let connector: Option<Connector> = if self.allow_skip_cert_check {
             let config = ClientConfig::builder()
                 .with_safe_defaults()
-                .with_root_certificates(RootCertStore::empty())
-                .with_no_client_auth()
-                .dangerous()
-                .set_certificate_verifier(insecure_verifier());
+                .with_custom_certificate_verifier(insecure_verifier())
+                .with_no_client_auth();
             Some(Connector::Rustls(Arc::new(config)))
         } else {
             None
