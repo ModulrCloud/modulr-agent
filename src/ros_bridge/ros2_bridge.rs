@@ -91,13 +91,26 @@ impl RosBridge for Ros2Bridge {
                     image_sub.next()
                 ).await;
                 
-                let msg = match timeout_result {
-                    Ok(msg) => {
-                        log::debug!("Got message from subscription");
-                        msg
+                let msg_result = match timeout_result {
+                    Ok(Some(msg_result)) => {
+                        log::debug!("Got message from subscription (may be Result)");
+                        msg_result
+                    },
+                    Ok(None) => {
+                        log::warn!("Subscription stream returned None - stream may have ended");
+                        break;
                     },
                     Err(_) => {
                         log::warn!("Timeout waiting for image message - subscription may not be receiving data");
+                        continue;
+                    }
+                };
+                
+                // Handle Result from the subscription stream
+                let msg = match msg_result {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        log::error!("Error receiving message from subscription: {:?}", e);
                         continue;
                     }
                 };
