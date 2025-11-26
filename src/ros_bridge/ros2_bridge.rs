@@ -36,32 +36,49 @@ impl Ros2Bridge {
 #[async_trait]
 impl RosBridge for Ros2Bridge {
     async fn launch(&self) -> Result<(), super::RosBridgeError> {
+        log::info!("Connecting to rosbridge at ws://localhost:9090");
         let ros = ClientHandle::new("ws://localhost:9090")
             .await
-            .map_err(|_| RosBridgeError::InitFailure)?;
+            .map_err(|e| {
+                log::error!("Failed to connect to rosbridge: {:?}", e);
+                RosBridgeError::InitFailure
+            })?;
+        log::info!("Connected to rosbridge successfully");
 
+        log::info!("Advertising to /cmd_vel");
         let mvmt_pub = ros
             .advertise::<TwistStamped>("/cmd_vel")
             .await
-            .map_err(|_| RosBridgeError::PublisherCreateFailure)?;
+            .map_err(|e| {
+                log::error!("Failed to create publisher: {:?}", e);
+                RosBridgeError::PublisherCreateFailure
+            })?;
+        log::info!("Publisher created successfully");
 
+        log::info!("Subscribing to /camera/image_raw");
         let image_sub = ros
             .subscribe::<Image>("/camera/image_raw")
             .await
-            .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
+            .map_err(|e| {
+                log::error!("Failed to subscribe to /camera/image_raw: {:?}", e);
+                RosBridgeError::SubscriptionCreateFailure
+            })?;
+        log::info!("Subscribed to /camera/image_raw successfully");
 
         self.bridge_handle.lock().await.replace(ros);
         self.mvmt_pub.lock().await.replace(mvmt_pub);
 
         let listeners = Arc::clone(&self.image_listeners);
         tokio::spawn(async move {
+            log::info!("Starting image receiver loop");
             loop {
                 let msg = image_sub.next().await;
+                log::debug!("Received image frame: {}x{}", msg.width, msg.height);
                 let mut decoded = Vec::<u8>::with_capacity((msg.step * msg.height) as usize);
                 match general_purpose::STANDARD.decode_vec(&msg.data, &mut decoded) {
                     Ok(_) => (),
-                    Err(_) => {
-                        log::error!("Failed to decode image data as base64!");
+                    Err(e) => {
+                        log::error!("Failed to decode image data as base64: {:?}", e);
                         continue;
                     }
                 };
