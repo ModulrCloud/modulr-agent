@@ -180,17 +180,18 @@ impl WebRtcLink {
     pub async fn try_connect(&mut self) -> Result<(), WebRtcLinkError> {
         info!("Connecting to WebRTC server at {}", self.signaling_url);
 
-        let config = if self.allow_skip_cert_check {
-            Some(ClientConfig::builder()
+        let connector: Option<Connector> = if self.allow_skip_cert_check {
+            let mut builder = ClientConfig::builder()
                 .with_root_certificates(RootCertStore::empty())
                 .with_no_client_auth()
-                .dangerous()
-                .set_certificate_verifier(insecure_verifier()))
+                .dangerous();
+            builder.set_certificate_verifier(insecure_verifier());
+            // In rustls 0.23+, set_certificate_verifier modifies builder in place
+            // and the builder itself becomes the config
+            Some(Connector::Rustls(Arc::new(builder)))
         } else {
             None
         };
-
-        let connector = config.map(|cfg| Connector::Rustls(Arc::new(cfg)));
 
         let (ws_stream, _) =
             connect_async_tls_with_config(&self.signaling_url, None, false, connector)
