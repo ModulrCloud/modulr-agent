@@ -17,17 +17,8 @@ def generate_launch_description():
             parameters=[{
                 'port': LaunchConfiguration('port'),
                 'address': '',
-                'delay_between_messages': 0.0,  # DOUBLE
-                'max_message_size': 10000000,  # INTEGER
-                'fragment_timeout': 600.0,  # DOUBLE
-                'unregister_timeout': 10.0,  # DOUBLE
-                'use_compression': False,  # BOOL
-                'topics_glob': '',
-                'services_glob': '',
-                'params_glob': '',
-                'bson_only_mode': False,  # BOOL
-                'websocket_ping_interval': 0,  # INTEGER
-                'websocket_ping_timeout': 5,  # INTEGER (not DOUBLE!)
+                # Only set essential parameters, let others use defaults
+                # This avoids parameter type conflicts in rosbridge Jazzy
             }]
         ),
         Node(
