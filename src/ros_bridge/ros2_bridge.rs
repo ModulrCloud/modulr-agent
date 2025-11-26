@@ -72,26 +72,41 @@ impl RosBridge for Ros2Bridge {
         tokio::spawn(async move {
             log::info!("Starting image receiver loop");
             let mut frame_count = 0;
+            let mut last_log_time = std::time::Instant::now();
+            
             loop {
+                log::debug!("Waiting for next image message...");
                 let msg = image_sub.next().await;
+                log::debug!("Got message from subscription");
+                
                 frame_count += 1;
-                if frame_count % 30 == 0 {
-                    log::info!("Received {} image frames so far (latest: {}x{})", frame_count, msg.width, msg.height);
+                let now = std::time::Instant::now();
+                
+                if frame_count == 1 || now.duration_since(last_log_time).as_secs() >= 1 {
+                    log::info!("Received {} image frames so far (latest: {}x{}, encoding: {})", 
+                              frame_count, msg.width, msg.height, msg.encoding);
+                    last_log_time = now;
                 } else {
                     log::debug!("Received image frame: {}x{}", msg.width, msg.height);
                 }
+                
+                log::debug!("Decoding base64 image data (data length: {} bytes)", msg.data.len());
                 let mut decoded = Vec::<u8>::with_capacity((msg.step * msg.height) as usize);
                 match general_purpose::STANDARD.decode_vec(&msg.data, &mut decoded) {
-                    Ok(_) => (),
+                    Ok(_) => {
+                        log::debug!("Successfully decoded image: {} bytes", decoded.len());
+                    },
                     Err(e) => {
                         log::error!("Failed to decode image data as base64: {:?}", e);
                         continue;
                     }
                 };
                 let buffer = Bytes::from(decoded);
+                log::debug!("Sending image to {} listeners", listeners.lock().await.len());
                 for listener in listeners.lock().await.iter_mut() {
                     listener(&buffer).await;
                 }
+                log::debug!("Finished processing image frame");
             }
         });
 
