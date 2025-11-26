@@ -3,7 +3,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use rustls::client::{ServerCertVerified, ServerCertVerifier};
-use rustls::{Certificate, ClientConfig, RootCertStore, ServerName};
+use rustls::{Certificate, ClientConfig, ServerName};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
