@@ -76,8 +76,23 @@ impl RosBridge for Ros2Bridge {
             
             loop {
                 log::debug!("Waiting for next image message...");
-                let msg = image_sub.next().await;
-                log::debug!("Got message from subscription");
+                
+                // Add a timeout to detect if we're stuck waiting
+                let timeout_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    image_sub.next()
+                ).await;
+                
+                let msg = match timeout_result {
+                    Ok(msg) => {
+                        log::debug!("Got message from subscription");
+                        msg
+                    },
+                    Err(_) => {
+                        log::warn!("Timeout waiting for image message - subscription may not be receiving data");
+                        continue;
+                    }
+                };
                 
                 frame_count += 1;
                 let now = std::time::Instant::now();
