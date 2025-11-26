@@ -71,9 +71,15 @@ impl RosBridge for Ros2Bridge {
         let listeners = Arc::clone(&self.image_listeners);
         tokio::spawn(async move {
             log::info!("Starting image receiver loop");
+            let mut frame_count = 0;
             loop {
                 let msg = image_sub.next().await;
-                log::debug!("Received image frame: {}x{}", msg.width, msg.height);
+                frame_count += 1;
+                if frame_count % 30 == 0 {
+                    log::info!("Received {} image frames so far (latest: {}x{})", frame_count, msg.width, msg.height);
+                } else {
+                    log::debug!("Received image frame: {}x{}", msg.width, msg.height);
+                }
                 let mut decoded = Vec::<u8>::with_capacity((msg.step * msg.height) as usize);
                 match general_purpose::STANDARD.decode_vec(&msg.data, &mut decoded) {
                     Ok(_) => (),
