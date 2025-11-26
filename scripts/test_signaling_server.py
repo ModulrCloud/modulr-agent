@@ -1,11 +1,8 @@
-import asyncio
-import websockets
-import json
-import ssl
+import asyncio, websockets, json, ssl
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 8765
-URI = f"wss://{SERVER_HOST}:{SERVER_PORT}"
+URI = f"ws://{SERVER_HOST}:{SERVER_PORT}"
 
 # SSL context (use self-signed cert)
 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -13,7 +10,7 @@ ssl_context.check_hostname = False  # Skip hostname verification (for self-signe
 ssl_context.verify_mode = ssl.CERT_NONE  # Skip certificate verification (for testing)
 
 async def test_client():
-    print(f"Connecting to wss://{SERVER_HOST}:{SERVER_PORT}...")
+    print(f"Connecting to {URI}...")
 
     try:
         async with websockets.connect(

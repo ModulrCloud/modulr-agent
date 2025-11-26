@@ -2,6 +2,14 @@ import asyncio, websockets, json, ssl
 
 
 clients = {}
+local   = True
+
+# # TLS configuration
+ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ssl_context.load_cert_chain("certs/dev-server.crt", "certs/dev-server.key")
+
+if local:
+    ssl_context = None
 
 async def handler(ws):
     print("Waiting for connections. Connected clients: {}".format(clients))
@@ -27,11 +35,7 @@ async def main():
     local_ip = "0.0.0.0"
     port = 8765
 
-    # TLS configuration
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain("certs/dev-server.crt", "certs/dev-server.key")
-
-    print(f"Starting secure WebSocket server at wss://{local_ip}:{port}")
+    print(f"Starting secure WebSocket server at ws://{local_ip}:{port}")
     async with websockets.serve(handler, local_ip, port, ssl=ssl_context):
         await asyncio.Future()
 

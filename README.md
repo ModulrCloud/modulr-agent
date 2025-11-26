@@ -35,11 +35,18 @@ sudo apt install -y  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 
 Finally, ROS is required. ROS 1 and ROS 2 are both supported. For ROS1, install Noetic as per [these installation instructions](https://wiki.ros.org/noetic/Installation/Ubuntu). For ROS2, we recommend using Kilted as the latest release ([installation instructions](https://docs.ros.org/en/kilted/Installation/Ubuntu-Install-Debs.html)), but earlier distros should also work.
 
-In addition to base ROS, a websocket bridge server is required for ROS 2 only:
+For ROS1: set the flag in `src/commands/start.rs` line 20.
+
+```rust
+const ROS1: bool = false;
+```
+
+For ROS2: a websocket bridge server is additionally required:
 
 ```bash
 sudo apt install ros-$ROS_DISTRO-rosbridge-suite
 ```
+
 
 Build the package as follows:
 
