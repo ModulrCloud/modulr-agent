@@ -181,13 +181,11 @@ impl WebRtcLink {
         info!("Connecting to WebRTC server at {}", self.signaling_url);
 
         let connector: Option<Connector> = if self.allow_skip_cert_check {
-            let mut dangerous_builder = ClientConfig::builder()
+            let config = ClientConfig::builder()
                 .with_root_certificates(RootCertStore::empty())
                 .with_no_client_auth()
-                .dangerous();
-            dangerous_builder.set_certificate_verifier(insecure_verifier());
-            // Convert DangerousClientConfig to ClientConfig
-            let config: ClientConfig = dangerous_builder.into();
+                .dangerous()
+                .set_certificate_verifier(insecure_verifier());
             Some(Connector::Rustls(Arc::new(config)))
         } else {
             None
