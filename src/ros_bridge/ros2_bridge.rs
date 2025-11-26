@@ -64,13 +64,21 @@ impl RosBridge for Ros2Bridge {
                 RosBridgeError::SubscriptionCreateFailure
             })?;
         log::info!("Subscribed to /camera/image_raw successfully");
-
+        
+        // Store ClientHandle AFTER subscription to keep it alive
+        // The subscription stream needs the ClientHandle to remain active
         self.bridge_handle.lock().await.replace(ros);
         self.mvmt_pub.lock().await.replace(mvmt_pub);
+        
+        // Also keep a reference in the spawned task to ensure ClientHandle stays alive
+        let ros_keep_alive = Arc::clone(&self.bridge_handle);
 
         let listeners = Arc::clone(&self.image_listeners);
+        let ros_keep_alive = Arc::clone(&self.bridge_handle);
         tokio::spawn(async move {
             log::info!("Starting image receiver loop");
+            // Keep ClientHandle alive by holding a reference to it
+            let _ros_ref = ros_keep_alive;
             let mut frame_count = 0;
             let mut last_log_time = std::time::Instant::now();
             
