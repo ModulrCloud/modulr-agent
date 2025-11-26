@@ -181,14 +181,14 @@ impl WebRtcLink {
         info!("Connecting to WebRTC server at {}", self.signaling_url);
 
         let connector: Option<Connector> = if self.allow_skip_cert_check {
-            let mut builder = ClientConfig::builder()
+            let mut dangerous_builder = ClientConfig::builder()
                 .with_root_certificates(RootCertStore::empty())
                 .with_no_client_auth()
                 .dangerous();
-            builder.set_certificate_verifier(insecure_verifier());
-            // In rustls 0.23+, set_certificate_verifier modifies builder in place
-            // and the builder itself becomes the config
-            Some(Connector::Rustls(Arc::new(builder)))
+            dangerous_builder.set_certificate_verifier(insecure_verifier());
+            // Convert DangerousClientConfig to ClientConfig
+            let config: ClientConfig = dangerous_builder.into();
+            Some(Connector::Rustls(Arc::new(config)))
         } else {
             None
         };
