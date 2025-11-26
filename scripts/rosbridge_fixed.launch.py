@@ -26,8 +26,8 @@ def generate_launch_description():
                 'services_glob': '',
                 'params_glob': '',
                 'bson_only_mode': False,  # BOOL
-                'websocket_ping_interval': 0,  # INTEGER (not DOUBLE!)
-                'websocket_ping_timeout': 5.0,  # DOUBLE
+                'websocket_ping_interval': 0,  # INTEGER
+                'websocket_ping_timeout': 5,  # INTEGER (not DOUBLE!)
             }]
         ),
         Node(
