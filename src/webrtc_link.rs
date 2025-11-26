@@ -3,8 +3,8 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, DigitallySignedStruct, ServerName};
-use rustls::{ClientConfig, RootCertStore, SignatureScheme};
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -181,21 +181,19 @@ impl WebRtcLink {
         info!("Connecting to WebRTC server at {}", self.signaling_url);
 
         let config = if self.allow_skip_cert_check {
-            ClientConfig::builder()
+            Some(ClientConfig::builder()
                 .with_root_certificates(RootCertStore::empty())
                 .with_no_client_auth()
                 .dangerous()
-                .set_certificate_verifier(insecure_verifier())
+                .set_certificate_verifier(insecure_verifier()))
         } else {
-            ClientConfig::builder()
-                .with_root_certificates(RootCertStore::empty())
-                .with_no_client_auth()
+            None
         };
 
-        let connector = Connector::Rustls(Arc::new(config));
+        let connector = config.map(|cfg| Connector::Rustls(Arc::new(cfg)));
 
         let (ws_stream, _) =
-            connect_async_tls_with_config(&self.signaling_url, None, false, Some(connector))
+            connect_async_tls_with_config(&self.signaling_url, None, false, connector)
                 .await
                 .map_err(|_| WebRtcLinkError::ConnectionAttemptFailed)?;
         let (ws_write, ws_read) = ws_stream.split();
