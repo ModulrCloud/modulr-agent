@@ -8,13 +8,21 @@ Use the following command to clone the package:
 
 ```bash
 git clone --recurse-submodules https://github.com/ModulrCloud/modulr-agent
+
 # If already cloned and you need to checkout the submodules:
 git submodule update --init --recursive
 ```
 
 ## Building the Package
 
-This package has only been tested on Ubuntu systems. To build the package, you will need to install Rust: https://rustup.rs/
+This package has only been tested on Ubuntu systems. 
+
+To build the package, you will need to install Rust: https://rustup.rs/
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
 
 You will also need to install GStreamer:
 
@@ -92,10 +100,12 @@ cargo run -- start
 cargo run -- -vvv start
 ```
 
-## Developer Signaling Server
+## Running Locally (for development)
+To control your robot on a LAN, run the Modulr webapp locally following the instructions at https://github.com/ModulrCloud/robot-teleop-webapp.
 
-In addition to running the Robot Teleapp webapp at https://github.com/ModulrCloud/robot-teleop-webapp, the `scripts` folder provides a local signaling server for testing robot connections. Note that this doesn't expose the server to the internet (without further user configuration), so only robots on the same LAN will be able to access it.
-
+Additionally, the `modulr-agent/scripts` folder contains a local signaling server script. 
+Note that this doesn't expose the server to the internet (without further user configuration), so only robots on the same LAN will be able to access it.
+  
 Python with virtualenv is recommended to run the server. To install dependencies and create certificates on Ubuntu:
 
 ```bash
@@ -122,22 +132,43 @@ Once the CA has been added, run the signaling server:
 python signaling_server.py
 ```
 
-You can test a connection by sourcing the virtual environment in another terminal and running:
+From another terminal, confirm that a robot with ID robot1 connects and disconnects:
 
 ```bash
 python test_signaling_server.py
 ```
 
-Check the logs of the signaling server to see that a robot with ID robot1 has connected and disconnected. If this is successful, use your local IP address as the signaling server for both your robot and the teleop webapp. The address is `wss://<your ip>:8765`, e.g. `wss://192.168.0.200:8765`. The argument `--allow-skip-cert-check` will also need to be passed to the robot. For example:
+Then you can configure both your robot and the webapp to communicate with the local signaling server.
+
+In the webapp, edit `src/config/signaling.ts` and point it to your server address, for example, ws://192.168.0.200:8765.  No need to rebuild, just relaunch the webapp. 
+
+```bash
+  if (window.location.hostname === 'localhost') {
+    return 'ws://192.168.0.200:8765';
+  }
+```
+
+In the robot, generate a local configuration file by passing the robot id and server address, for example:
 
 ```bash
 # Set the new signaling server URL to a test config
-cargo run -- initial-setup --config-override ./test_config.json --robot-id testrobot --signaling-url wss://192.168.0.200:8765
-# Run the agent, skipping the security checks
-cargo run -- -vvv start --config-override ./test_config.json --allow-skip-cert-check
+cargo run -- initial-setup --config-override ./local_config.json --robot-id robot1 --signaling-url ws://192.168.0.200:8765
 ```
 
-## Running in Simulation
+Then run the agent with `--allow-skip-cert-check`, for example:
+```bash
+
+# Run the agent, skipping the security checks
+cargo run -- -vvv start --config-override ./local_config.json --allow-skip-cert-check
+```
+
+*Note 1: In a local deployment, ensure all websocket addresses start with ws://*
+
+*Note 2: At present, ROS topics are hard-coded and the webapp supports movement control and video feedback. Ensure your robot is producing images on `/camera/image_raw` and the wheels are controllable on `/cmd/vel`, or alternatively edit `modulr-agent/ros_bridge` as required*
+
+
+
+## Running in simulation
 
 If not running on a real robot, you can test the system using a Turtlebot simulation. Install the turtlebot simulator using:
 
@@ -155,6 +186,6 @@ roslaunch turtlebot3_gazebo turtlebot3_world.launch
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 ```
 
-The robot should then be driveable using the agent.
+The robot should then be controllable using the agent.
 
-*Note that at present, all topics are hard-coded. You may need to check that the simulation is producing images on `/camera/image_raw` and adjust the source code if not. Similarly, the simulation may use Twist or TwistStamped messages for velocity commands, so if movement is not working, double-check the message type.*
+*Note The simulation may use Twist or TwistStamped messages for velocity commands, so if movement is not working, double-check the message type.*
