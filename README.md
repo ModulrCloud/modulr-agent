@@ -158,3 +158,52 @@ ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 The robot should then be driveable using the agent.
 
 *Note that at present, all topics are hard-coded. You may need to check that the simulation is producing images on `/camera/image_raw` and adjust the source code if not. Similarly, the simulation may use Twist or TwistStamped messages for velocity commands, so if movement is not working, double-check the message type.*
+
+## Using a Camera as a ROS2 Node (Laptop Simulation)
+
+You can use your laptop's camera as a ROS2 node to simulate a robot. This is useful for testing without a physical robot.
+
+### Quick Setup
+
+1. **Install ROS2** (if not already installed):
+   ```bash
+   cd scripts
+   chmod +x setup_ros2_ubuntu.sh
+   ./setup_ros2_ubuntu.sh
+   ```
+
+   Or follow the detailed guide in `scripts/ROS2_SETUP_GUIDE.md`.
+
+2. **Start the camera simulation** (easiest method):
+   ```bash
+   chmod +x scripts/start_camera_simulation.sh
+   ./scripts/start_camera_simulation.sh
+   ```
+
+   This will start both rosbridge and the camera node automatically.
+
+### Manual Setup
+
+If you prefer to run components separately:
+
+1. **Terminal 1 - Start rosbridge**:
+   ```bash
+   source /opt/ros/$ROS_DISTRO/setup.bash
+   ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+   ```
+
+2. **Terminal 2 - Start camera node**:
+   ```bash
+   source /opt/ros/$ROS_DISTRO/setup.bash
+   python3 scripts/camera_node.py
+   ```
+
+3. **Terminal 3 - Run the agent**:
+   ```bash
+   source /opt/ros/$ROS_DISTRO/setup.bash
+   cargo run -- start
+   ```
+
+The camera node publishes images to `/camera/image_raw`, which matches what the agent expects. The agent will publish movement commands to `/cmd_vel` (though these won't have any effect without a robot to control).
+
+For more details, troubleshooting, and camera configuration options, see `scripts/ROS2_SETUP_GUIDE.md`.
