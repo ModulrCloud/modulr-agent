@@ -65,23 +65,28 @@ impl RosBridge for Ros2Bridge {
             })?;
         log::info!("Subscribed to /camera/image_raw successfully");
         
+        // Store publisher first
+        self.mvmt_pub.lock().await.replace(mvmt_pub);
+        
         // Give rosbridge a moment to register the subscription
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         log::debug!("Subscription should now be active");
         
-        // Store ClientHandle AFTER subscription to keep it alive
-        // The subscription stream needs the ClientHandle to remain active
-        self.bridge_handle.lock().await.replace(ros);
-        self.mvmt_pub.lock().await.replace(mvmt_pub);
-        
-        // Also keep a reference in the spawned task to ensure ClientHandle stays alive
-        let ros_keep_alive = Arc::clone(&self.bridge_handle);
+        // Move subscription stream AND ClientHandle into spawned task
+        // CRITICAL: The ClientHandle MUST stay alive for the subscription stream to work
+        // If ClientHandle is dropped, the WebSocket connection closes and subscription fails
         let listeners = Arc::clone(&self.image_listeners);
+        
+        // Store ClientHandle for publisher use (movement commands)
+        // We'll keep a separate reference in the spawned task for the subscription
+        let ros_for_publisher = ros.clone();
+        self.bridge_handle.lock().await.replace(ros_for_publisher);
         
         tokio::spawn(async move {
             log::info!("Starting image receiver loop");
-            // Keep ClientHandle alive by holding a reference to it
-            let _ros_ref = ros_keep_alive;
+            // CRITICAL: Keep ClientHandle alive in the task that uses the subscription
+            // If this is dropped, the subscription stream will fail
+            let _ros_handle = ros;
             let mut frame_count = 0;
             let mut last_log_time = std::time::Instant::now();
             
