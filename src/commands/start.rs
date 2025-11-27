@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
 use log::{debug, info, warn};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 use crate::commands::config::read_config;
 use crate::ros_bridge::Ros1Bridge;
@@ -27,6 +29,9 @@ pub struct StartArgs {
     /// Allow not checking certificates on WebRTC link
     #[arg(long, default_value_t = false)]
     allow_skip_cert_check: bool,
+    /// Use test pattern instead of camera feed (bypasses ROS)
+    #[arg(long, default_value_t = false)]
+    test_pattern: bool,
 }
 
 pub async fn start(args: StartArgs) -> Result<()> {
@@ -134,10 +139,91 @@ pub async fn start(args: StartArgs) -> Result<()> {
         debug!("Finished launching video pipeline");
         Ok::<(), VideoPipelineError>(())
     });
-    bridge.lock().await.launch().await?;
+    
+    // Start test pattern generator if requested (bypasses ROS)
+    if args.test_pattern {
+        info!("Starting test pattern generator (bypassing ROS bridge)");
+        let pipeline_test = Arc::clone(&pipeline);
+        tokio::spawn(async move {
+            generate_test_pattern(pipeline_test).await;
+        });
+    } else {
+        bridge.lock().await.launch().await?;
+    }
 
     let _ = tokio::signal::ctrl_c().await;
     info!("Exit requested, cleaning up...");
     pipeline.lock().await.stop_pipeline().await?;
     Ok(())
+}
+
+/// Generate test pattern frames at ~30fps and feed them to the video pipeline
+/// This bypasses ROS entirely and tests the video pipeline + WebRTC connection
+async fn generate_test_pattern(pipeline: Arc<Mutex<VideoPipeline>>) {
+    const WIDTH: usize = 640;
+    const HEIGHT: usize = 480;
+    const FRAME_SIZE: usize = WIDTH * HEIGHT * 3; // RGB format
+    
+    let frame_duration = Duration::from_secs(1) / 30; // ~30 fps
+    let mut frame_count = 0u64;
+    let start_time = Instant::now();
+    
+    info!("Test pattern generator started - generating {}x{} RGB frames", WIDTH, HEIGHT);
+    
+    loop {
+        let frame_start = Instant::now();
+        
+        // Generate a test pattern: moving colored gradient
+        let mut frame = vec![0u8; FRAME_SIZE];
+        let t = start_time.elapsed().as_secs_f32();
+        
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let idx = (y * WIDTH + x) * 3;
+                
+                // Create a moving gradient pattern
+                let fx = x as f32 / WIDTH as f32;
+                let fy = y as f32 / HEIGHT as f32;
+                
+                // Animated gradient
+                let r = ((fx + t * 0.1) * 255.0) as u8 % 255;
+                let g = ((fy + t * 0.15) * 255.0) as u8 % 255;
+                let b = ((fx + fy + t * 0.2) * 255.0) as u8 % 255;
+                
+                frame[idx] = r;
+                frame[idx + 1] = g;
+                frame[idx + 2] = b;
+                
+                // Add a moving white square
+                let square_size = 100;
+                let square_x = ((t * 50.0) as usize) % (WIDTH - square_size);
+                let square_y = ((t * 30.0) as usize) % (HEIGHT - square_size);
+                
+                if x >= square_x && x < square_x + square_size &&
+                   y >= square_y && y < square_y + square_size {
+                    frame[idx] = 255;
+                    frame[idx + 1] = 255;
+                    frame[idx + 2] = 255;
+                }
+            }
+        }
+        
+        // Send frame to pipeline
+        if let Err(e) = pipeline.lock().await.queue_frame(&frame).await {
+            warn!("Failed to queue test frame: {:?}", e);
+            break;
+        }
+        
+        frame_count += 1;
+        if frame_count % 90 == 0 {
+            info!("Generated {} test frames (running for {:.1}s)", 
+                  frame_count, start_time.elapsed().as_secs_f32());
+        }
+        
+        // Sleep to maintain ~30fps
+        let elapsed = frame_start.elapsed();
+        if elapsed < frame_duration {
+            sleep(frame_duration - elapsed).await;
+        }
+    }
 }
