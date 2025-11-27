@@ -19,10 +19,10 @@ class CameraNode(Node):
     def __init__(self, camera_index=0, frame_rate=30):
         super().__init__('camera_publisher')
         
-        # Create publisher for camera images with Reliable QoS
-        # This ensures compatibility with rosbridge_server which expects Reliable QoS
+        # Create publisher for camera images with Best Effort QoS
+        # Rosbridge subscribes with BEST_EFFORT, so we need to match it for compatibility
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
             durability=DurabilityPolicy.VOLATILE
