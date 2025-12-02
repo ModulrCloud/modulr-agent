@@ -13,23 +13,23 @@ use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+    connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
 use tungstenite::Message;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::api::APIBuilder;
-use webrtc::api::media_engine::{MIME_TYPE_H264, MediaEngine};
-use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::media::Sample;
-use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::TrackLocal;
 
 use crate::webrtc_message::WebRtcMessage;
 
@@ -39,7 +39,9 @@ type MaybeWebSocketReader =
     Arc<Mutex<Option<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>>;
 
 pub type OnWebRtcMessageHdlrFn = Box<
-    dyn (FnMut(&WebRtcMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
+    dyn (FnMut(&WebRtcMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
+        + Send
+        + Sync,
 >;
 
 fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
@@ -101,7 +103,7 @@ pub enum WebRtcLinkError {
     FailedToSendMessage,
     #[error("Unrecognised message type received")]
     UnrecognisedMessage,
-    #[error("Failed to write framte to GStreamer")]
+    #[error("Failed to write frame to GStreamer")]
     WriteFrameError,
 }
 
@@ -118,6 +120,10 @@ pub struct WebRtcLink {
     ws_write: MaybeWebSocketWriter,
     ws_read: MaybeWebSocketReader,
     peer_connection: Arc<Mutex<Option<RTCPeerConnection>>>,
+
+    // ICE state helpers
+    remote_desc_set: Arc<Mutex<bool>>,
+    pending_remote_candidates: Arc<Mutex<Vec<RTCIceCandidateInit>>>,
 
     // Valid only after full connection
     video_track: Arc<Mutex<Option<Arc<TrackLocalStaticSample>>>>,
@@ -138,6 +144,8 @@ impl WebRtcLink {
             ws_write: Arc::new(Mutex::new(None)),
             ws_read: Arc::new(Mutex::new(None)),
             peer_connection: Arc::new(Mutex::new(None)),
+            remote_desc_set: Arc::new(Mutex::new(false)),
+            pending_remote_candidates: Arc::new(Mutex::new(Vec::new())),
             video_track: Arc::new(Mutex::new(None)),
             data_channel: Arc::new(Mutex::new(None)),
             remote_id: Arc::new(Mutex::new(None)),
@@ -183,12 +191,10 @@ impl WebRtcLink {
 
         debug!("Adding default codecs to WebRTC offer");
         let mut media_engine = MediaEngine::default();
-        media_engine
-            .register_default_codecs()
-            .map_err(|e| {
-                error!("❌ Register_default_codecs failed: {e}");
-                WebRtcLinkError::AddDefaultCodecFailed
-            })?;
+        media_engine.register_default_codecs().map_err(|e| {
+            error!("❌ Register_default_codecs failed: {e}");
+            WebRtcLinkError::AddDefaultCodecFailed
+        })?;
         let api = APIBuilder::new().with_media_engine(media_engine).build();
 
         debug!("Adding STUN servers to WebRTC offer");
@@ -201,13 +207,10 @@ impl WebRtcLink {
         };
 
         debug!("Creating peer connection");
-        let peer_connection = api
-            .new_peer_connection(config)
-            .await
-            .map_err(|e| {
-                error!("❌ New_peer_connection failed: {e}");
-                WebRtcLinkError::PeerConnectionCreationFailed
-            })?;
+        let peer_connection = api.new_peer_connection(config).await.map_err(|e| {
+            error!("❌ New_peer_connection failed: {e}");
+            WebRtcLinkError::PeerConnectionCreationFailed
+        })?;
 
         info!("✅ PeerConnection created for robot_id={}", self.local_id);
 
@@ -225,9 +228,7 @@ impl WebRtcLink {
             let robot_id = robot_id.clone();
 
             Box::pin(async move {
-                if let Some(candidate) = c
-                    && let Some(ws_write) = &mut *write_clone.lock().await
-                {
+                if let Some(candidate) = c && let Some(ws_write) = &mut *write_clone.lock().await {
                     match candidate.to_json() {
                         Ok(json_candidate) => {
                             let maybe_to = remote_id.lock().await.clone();
@@ -321,7 +322,6 @@ impl WebRtcLink {
         Ok(())
     }
 
-
     pub async fn try_register(&mut self) -> Result<(), WebRtcLinkError> {
         let current_status = *self.status.lock().await;
         info!(
@@ -346,8 +346,8 @@ impl WebRtcLink {
         };
 
         if let Some(ws_write) = &mut *self.ws_write.lock().await {
-            let encoded = serde_json::to_string(&register_msg)
-                .map_err(|_| WebRtcLinkError::EncodeMessageFailure)?;
+            let encoded =
+                serde_json::to_string(&register_msg).map_err(|_| WebRtcLinkError::EncodeMessageFailure)?;
             debug!("Sending register message: {encoded}");
 
             ws_write
@@ -369,7 +369,6 @@ impl WebRtcLink {
 
         Ok(())
     }
-
 
     pub async fn write_frame(&self, frame: Bytes) -> Result<(), WebRtcLinkError> {
         if let Some(video) = self.video_track.lock().await.as_ref() {
@@ -398,6 +397,8 @@ impl WebRtcLink {
         let read_clone = Arc::clone(&self.ws_read);
         let video_track_clone = Arc::clone(&self.video_track);
         let peer_connection_clone = Arc::clone(&self.peer_connection);
+        let remote_desc_set_clone = Arc::clone(&self.remote_desc_set);
+        let pending_remote_candidates_clone = Arc::clone(&self.pending_remote_candidates);
         let robot_id = self.local_id.clone();
 
         info!("Starting listen loop for robot_id={}", robot_id);
@@ -454,7 +455,8 @@ impl WebRtcLink {
                                     warn!("Offer received without 'from', remote_id not set");
                                 }
 
-                                let video_track = add_video_track(&peer_connection_clone).await?;
+                                let video_track =
+                                    add_video_track(&peer_connection_clone).await?;
                                 video_track_clone.lock().await.replace(video_track);
 
                                 if let Some(pc) = peer_connection_clone.lock().await.as_mut() {
@@ -464,6 +466,34 @@ impl WebRtcLink {
                                             error!("set_remote_description failed: {e}");
                                             WebRtcLinkError::RemoteDescriptionFailed
                                         })?;
+
+                                    // Mark remote description as set
+                                    {
+                                        let mut rd =
+                                            remote_desc_set_clone.lock().await;
+                                        *rd = true;
+                                    }
+
+                                    // Flush any queued remote candidates
+                                    {
+                                        let mut pending =
+                                            pending_remote_candidates_clone.lock().await;
+                                        if !pending.is_empty() {
+                                            info!(
+                                                "Flushing {} pending ICE candidates",
+                                                pending.len()
+                                            );
+                                            for cand in pending.drain(..) {
+                                                if let Err(e) =
+                                                    pc.add_ice_candidate(cand).await
+                                                {
+                                                    error!(
+                                                        "Failed to add queued ICE candidate: {e}"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
 
                                     info!("Remote description set, creating answer");
 
@@ -526,16 +556,33 @@ impl WebRtcLink {
                                                 WebRtcLinkError::ParseMessageFailure
                                             })?;
 
-                                    if let Some(pc) = peer_connection_clone.lock().await.as_mut() {
+                                    let remote_desc_is_set =
+                                        *remote_desc_set_clone.lock().await;
+
+                                    if !remote_desc_is_set {
+                                        info!(
+                                            "Remote description not set yet, buffering ICE candidate"
+                                        );
+                                        pending_remote_candidates_clone
+                                            .lock()
+                                            .await
+                                            .push(candidate);
+                                    } else if let Some(pc) =
+                                        peer_connection_clone.lock().await.as_mut()
+                                    {
                                         info!("Adding remote ICE candidate");
                                         pc.add_ice_candidate(candidate)
                                             .await
                                             .map_err(|e| {
-                                                error!("add_ice_candidate failed: {e}");
+                                                error!(
+                                                    "add_ice_candidate failed: {e}"
+                                                );
                                                 WebRtcLinkError::AddIceCandidateFailed
                                             })?;
                                     } else {
-                                        error!("PeerConnection is None in candidate handler");
+                                        error!(
+                                            "PeerConnection is None in candidate handler"
+                                        );
                                     }
                                 } else {
                                     warn!("Candidate message with no candidate field");
@@ -560,7 +607,6 @@ impl WebRtcLink {
             Ok::<(), WebRtcLinkError>(())
         });
     }
-
 }
 
 #[derive(Serialize, Deserialize, Debug)]
