@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
 use crate::commands::config::read_config;
@@ -124,7 +124,13 @@ pub async fn start(args: StartArgs) -> Result<()> {
 
     tokio::spawn(async move {
         let mut guard = webrtc_link.lock().await;
-        guard.try_connect().await?;
+        match guard.try_connect().await {
+            Ok(x) => Ok(x),
+            Err(e) => {
+                error!("Error during WebRTC connection: {}", e);
+                Err(e)
+            }
+        }?;
         guard.try_register().await?;
         Ok::<(), WebRtcLinkError>(())
     });
