@@ -98,7 +98,7 @@ jobs:
           cross build --release --target ${{ matrix.target }}
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: my-project-${{ matrix.target }}
+          name: modulr-agent-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/
