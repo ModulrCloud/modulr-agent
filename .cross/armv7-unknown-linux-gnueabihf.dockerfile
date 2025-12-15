@@ -1,13 +1,24 @@
-FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:latest
+# Use the official Cross ARM64 base image
+FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main
 
+# Add armv7 architecture and install target libraries
 RUN dpkg --add-architecture armhf && \
     apt update && \
-    apt install -y libgstreamer1.0-dev:armhf libgstreamer-plugins-base1.0-dev:armhf libssl-dev:armhf pkg-config:armhf && \
+    apt install -y --no-install-recommends \
+        libssl-dev \
+        pkg-config \
+        libssl-dev:armhf \
+        libgstreamer1.0-dev:armhf \
+        libgstreamer-plugins-base1.0-dev:armhf \
+        g++-arm-linux-gnueabihf && \
     rm -rf /var/lib/apt/lists/*
 
-ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-    CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc \
-    CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++ \
-    QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf \
-    RUST_TEST_THREADS=1 \
-    PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+# Host OpenSSL
+ENV OPENSSL_DIR=/usr
+ENV OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV OPENSSL_INCLUDE_DIR=/usr/include
+
+# Target OpenSSL
+ENV OPENSSL_TARGET_DIR=/usr/armhf-linux-gnu
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
