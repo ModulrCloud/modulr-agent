@@ -93,6 +93,9 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build with Cross
+        env:
+          CC: clang
+          CXX: clang++
         run: |
           mkdir -p /tmp/.cross-docker
           cross build --release --target ${{ matrix.target }}
