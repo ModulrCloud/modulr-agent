@@ -4,7 +4,7 @@ use bytes::Bytes;
 use gstreamer::{
     self as gst, Pipeline,
     glib::object::Cast,
-    prelude::{ElementExt, GstBinExt},
+    prelude::{ElementExt, GstBinExt, ObjectExt},
 };
 use gstreamer_app::{self as gst_app, AppSinkCallbacks, AppSrc};
 use log::info;
@@ -50,22 +50,41 @@ impl VideoPipeline {
     }
 
     pub async fn launch(&mut self) -> Result<(), VideoPipelineError> {
-        info!("Initialising GStreamer");
+        info!("Launching GStreamer pipeline");
         gst::init().map_err(|_| VideoPipelineError::GStreamerInitFailure)?;
 
-        info!("Launching GStreamer pipeline");
-        let pipeline = gst::parse::launch(
-            "appsrc name=src ! videoconvert ! x264enc tune=zerolatency key-int-max=30 byte-stream=true ! video/x-h264,stream-format=byte-stream,profile=baseline ! appsink name=sink",
-        ).map_err(|_| VideoPipelineError::GStreamerParseError)?;
-        let pipeline = pipeline
+        let use_hw = gst::ElementFactory::find("nvv4l2h264enc").is_some();
+        let pipeline_str = if use_hw {
+            log::info!("Using Jetson hardware H.264 encoder");
+            "
+            appsrc name=src is-live=true do-timestamp=true format=time !
+            videoconvert !
+            nvvidconv !
+            video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
+            nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
+            h264parse !
+            appsink name=sink
+            "
+        } else {
+            log::warn!("Falling back to x264enc (software)");
+            "
+            appsrc name=src is-live=true do-timestamp=true format=time !
+            videoconvert !
+            x264enc tune=zerolatency key-int-max=30 byte-stream=true !
+            video/x-h264,stream-format=byte-stream,profile=baseline !
+            appsink name=sink
+            "
+        };
+
+        let pipeline = gst::parse::launch(pipeline_str)
+            .map_err(|_| VideoPipelineError::GStreamerParseError)?
             .downcast::<gst::Pipeline>()
             .map_err(|_| VideoPipelineError::GStreamerDowncastFailure)?;
 
         let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGB")
+            .field("format", "BGR")
             .field("width", 640)
             .field("height", 480)
-            .field("framerate", gst::Fraction::new(30, 1))
             .build();
 
         let src = pipeline
@@ -74,11 +93,9 @@ impl VideoPipeline {
             .downcast::<gst_app::AppSrc>()
             .map_err(|_| VideoPipelineError::GStreamerDowncastFailure)?;
         src.set_caps(Some(&caps));
-
-        // TODO: experiment with these and callbacks to prevent too much data
-        // going in to the pipeline
-        // src.set_property("is-live", true);
-        // src.set_property("block", true);
+        src.set_property("is-live", true);
+        src.set_property("do-timestamp", true);
+        src.set_property("format", gst::Format::Time);
 
         // Store app source for pushing frames later
         self.appsrc.lock().await.replace(src);
@@ -90,7 +107,7 @@ impl VideoPipeline {
             .unwrap();
         let sink = Arc::new(sink);
 
-        // Create a channel for tokio to listen to
+        // Channel to send frames to listeners
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Bytes>(10);
         let listeners_clone = Arc::clone(&self.frame_listeners);
         tokio::spawn(async move {
@@ -112,9 +129,7 @@ impl VideoPipeline {
                         .map_readable()
                         .expect("Error mapping readable data from frame buffer!");
                     let data = Bytes::from(map.to_vec());
-                    frame_tx
-                        .blocking_send(data)
-                        .expect("Error sending video frame to channel!");
+                    let _ = frame_tx.try_send(data);
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
