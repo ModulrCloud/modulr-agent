@@ -57,22 +57,22 @@ impl VideoPipeline {
         let pipeline_str = if use_hw {
             log::info!("Using Jetson hardware H.264 encoder");
             "
-            appsrc name=src is-live=true do-timestamp=true format=time !
+            appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
             videoconvert !
             nvvidconv !
             video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
             nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
             h264parse !
-            appsink name=sink
+            appsink name=sink max-buffers=1 drop=true
             "
         } else {
             log::warn!("Falling back to x264enc (software)");
             "
-            appsrc name=src is-live=true do-timestamp=true format=time !
+            appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
             videoconvert !
-            x264enc tune=zerolatency key-int-max=30 byte-stream=true !
+            x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 byte-stream=true !
             video/x-h264,stream-format=byte-stream,profile=baseline !
-            appsink name=sink
+            appsink name=sink max-buffers=1 drop=true
             "
         };
 
@@ -108,12 +108,18 @@ impl VideoPipeline {
         let sink = Arc::new(sink);
 
         // Channel to send frames to listeners
-        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Bytes>(10);
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Bytes>(60);
         let listeners_clone = Arc::clone(&self.frame_listeners);
         tokio::spawn(async move {
             while let Some(buffer) = frame_rx.recv().await {
+                // Execute all listeners in parallel to avoid blocking
+                let mut handles = Vec::new();
                 for listener in listeners_clone.lock().await.iter_mut() {
-                    listener(&buffer).await;
+                    handles.push(listener(&buffer));
+                }
+                // Wait for all listeners to complete
+                for handle in handles {
+                    handle.await;
                 }
             }
         });
@@ -128,7 +134,7 @@ impl VideoPipeline {
                     let map = buffer
                         .map_readable()
                         .expect("Error mapping readable data from frame buffer!");
-                    let data = Bytes::from(map.to_vec());
+                    let data = Bytes::copy_from_slice(map.as_slice());
                     let _ = frame_tx.try_send(data);
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -148,7 +154,7 @@ impl VideoPipeline {
         self.frame_listeners.lock().await.push(listener);
     }
 
-    pub async fn queue_frame(&self, frame: &[u8]) -> Result<(), VideoPipelineError> {
+    pub async fn queue_frame(&self, frame: Bytes) -> Result<(), VideoPipelineError> {
         let buffer = gst::Buffer::from_slice(frame.to_vec());
         if let Some(src) = self.appsrc.lock().await.as_mut() {
             src.push_buffer(buffer)

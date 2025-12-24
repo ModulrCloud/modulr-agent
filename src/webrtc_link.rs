@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -77,8 +77,8 @@ pub enum WebRtcLinkStatus {
 
 #[derive(Error, Debug)]
 pub enum WebRtcLinkError {
-    #[error("Connection attempt failed")]
-    ConnectionAttemptFailed,
+    #[error("Connection attempt failed: `{0}`")]
+    ConnectionAttemptFailed(tungstenite::Error),
     #[error("Incorrect state for operation")]
     IncorrectStateForOperation,
     #[error("Failed to add default media codecs")]
@@ -129,6 +129,9 @@ pub struct WebRtcLink {
 
     // id of the partner
     remote_id: Arc<Mutex<Option<String>>>,
+
+    // Timing for frame rate calculation
+    last_frame_time: Arc<Mutex<Option<Instant>>>,
 }
 
 impl WebRtcLink {
@@ -147,11 +150,16 @@ impl WebRtcLink {
             video_track: Arc::new(Mutex::new(None)),
             data_channel: Arc::new(Mutex::new(None)),
             remote_id: Arc::new(Mutex::new(None)),
+            last_frame_time: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn on_webrtc_message(&mut self, listener: OnWebRtcMessageHdlrFn) {
         self.message_listeners.lock().await.push(listener);
+    }
+
+    pub async fn is_connected(&self) -> bool {
+        *self.status.lock().await == WebRtcLinkStatus::Connected
     }
 
     pub async fn try_connect(&mut self) -> Result<(), WebRtcLinkError> {
@@ -178,7 +186,7 @@ impl WebRtcLink {
         let (ws_stream, _) =
             connect_async_tls_with_config(&self.signaling_url, None, false, Some(connector))
                 .await
-                .map_err(|_| WebRtcLinkError::ConnectionAttemptFailed)?;
+                .map_err(WebRtcLinkError::ConnectionAttemptFailed)?;
 
         info!("WebSocket connected to signaling server");
 
@@ -365,10 +373,22 @@ impl WebRtcLink {
 
     pub async fn write_frame(&self, frame: Bytes) -> Result<(), WebRtcLinkError> {
         if let Some(video) = self.video_track.lock().await.as_ref() {
+            // Calculate duration based on actual time between frames
+            let now = Instant::now();
+            let mut last_time_guard = self.last_frame_time.lock().await;
+            let duration = if let Some(last_time) = *last_time_guard {
+                now.duration_since(last_time)
+            } else {
+                // Default to ~30fps for first frame
+                Duration::from_millis(33)
+            };
+            *last_time_guard = Some(now);
+            drop(last_time_guard);
+
             video
                 .write_sample(&Sample {
-                    data: Bytes::copy_from_slice(&frame),
-                    duration: Duration::from_millis(33),
+                    data: frame,
+                    duration,
                     ..Default::default()
                 })
                 .await

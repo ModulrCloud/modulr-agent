@@ -72,8 +72,6 @@ pub async fn start(args: StartArgs) -> Result<()> {
         }))
         .await;
 
-    // TODO: only queue frames in pipeline when WebRTC session is established
-
     // Pipeline -> WebRTC -> Browser
     let webrtc_link_clone = Arc::clone(&webrtc_link);
     pipeline
@@ -81,7 +79,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         .await
         .on_frame_ready(Box::new(move |frame: &Bytes| {
             let webrtc_link_clone = Arc::clone(&webrtc_link_clone);
-            let frame_clone = Bytes::copy_from_slice(frame);
+            let frame_clone = frame.clone();
             Box::pin(async move {
                 let err = webrtc_link_clone
                     .lock()
@@ -103,19 +101,24 @@ pub async fn start(args: StartArgs) -> Result<()> {
 
     // Robot frame -> Pipeline
     let pipeline_clone = Arc::clone(&pipeline);
+    let webrtc_link_clone = Arc::clone(&webrtc_link);
     bridge
         .lock()
         .await
         .on_image_frame_received(Box::new(move |data: &Bytes| {
-            let data_clone = Bytes::copy_from_slice(data);
             let pipeline_clone = Arc::clone(&pipeline_clone);
+            let webrtc_link_clone = Arc::clone(&webrtc_link_clone);
+            let data_clone = data.clone();
             Box::pin(async move {
-                pipeline_clone
-                    .lock()
-                    .await
-                    .queue_frame(&data_clone)
-                    .await
-                    .expect("Failed to write camera frame to pipeline!");
+                // Only process frames when WebRTC is connected
+                if webrtc_link_clone.lock().await.is_connected().await {
+                    pipeline_clone
+                        .lock()
+                        .await
+                        .queue_frame(data_clone)
+                        .await
+                        .expect("Failed to write camera frame to pipeline!");
+                }
             })
         }))
         .await;
@@ -140,7 +143,10 @@ pub async fn start(args: StartArgs) -> Result<()> {
         debug!("Finished launching video pipeline");
         Ok::<(), VideoPipelineError>(())
     });
-    bridge.lock().await.launch().await?;
+    if let Err(e) = bridge.lock().await.launch().await {
+        log::error!("{}", e);
+        return Err(e.into());
+    };
 
     let _ = tokio::signal::ctrl_c().await;
     info!("Exit requested, cleaning up...");
