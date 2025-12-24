@@ -9,7 +9,6 @@ use crate::ros_bridge::{
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose};
 use bytes::Bytes;
 use roslibrust::rosbridge::{ClientHandle, Publisher};
 use tokio::sync::Mutex;
@@ -57,15 +56,7 @@ impl RosBridge for Ros2Bridge {
         tokio::spawn(async move {
             loop {
                 let msg = image_sub.next().await;
-                let mut decoded = Vec::<u8>::with_capacity((msg.step * msg.height) as usize);
-                match general_purpose::STANDARD.decode_vec(&msg.data, &mut decoded) {
-                    Ok(_) => (),
-                    Err(_) => {
-                        log::error!("Failed to decode image data as base64!");
-                        continue;
-                    }
-                };
-                let buffer = Bytes::from(decoded);
+                let buffer = Bytes::from(msg.data);
                 for listener in listeners.lock().await.iter_mut() {
                     listener(&buffer).await;
                 }
