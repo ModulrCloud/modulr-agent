@@ -1,12 +1,20 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+
+#[derive(Parser, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
+pub enum VideoSource {
+    Ros,
+    Zenoh,
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentConfig {
     pub robot_id: String,
     pub signaling_url: String,
+    pub video_source: VideoSource,
 }
 
 pub fn get_default_path() -> Option<PathBuf> {
@@ -65,6 +73,7 @@ mod tests {
         let config = AgentConfig {
             robot_id: "my_robot_id".to_string(),
             signaling_url: "my_signaling_url".to_string(),
+            video_source: VideoSource::Ros,
         };
         let serialized = serde_json::to_string_pretty(&config).unwrap();
         println!("Serialized config: {}", serialized);
@@ -81,6 +90,7 @@ mod tests {
         let config = AgentConfig {
             robot_id: "my_robot_id".to_string(),
             signaling_url: "my_signaling_url".to_string(),
+            video_source: VideoSource::Ros,
         };
         let temp_file = NamedTempFile::new().unwrap();
         write_config(&config, Some(temp_file.path().to_path_buf())).unwrap();

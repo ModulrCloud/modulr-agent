@@ -1,0 +1,36 @@
+[package]
+name = "modulr_agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+webrtc = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"] }
+tungstenite = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+futures-util = "0.3.31"
+gstreamer = "0.24.2"
+gstreamer-app = "0.24.2"
+bytes = "1.10.1"
+thiserror = "2.0.17"
+env_logger = "0.11.8"
+log = "0.4.28"
+roslibrust = { version = "0.18.0", features = ["ros1", "rosbridge"] }
+async-trait = "0.1.89"
+futures = "0.3.31"
+base64 = "0.22.1"
+clap = { version = "4.5.52", features = ["derive"] }
+dirs = "6.0.0"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+modulr_ros_messages = { path = "../modulr_ros_messages" }
+modulr_zenoh_interface = { path = "../modulr_zenoh_interface", optional = true }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[features]
+default = ["zenoh"]
+zenoh = ["modulr_zenoh_interface"]

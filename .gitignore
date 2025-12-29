@@ -1,5 +1,5 @@
 /target
 Cargo.lock
 
-scripts/venv
-scripts/certs
+modulr_agent/scripts/venv
+modulr_agent/scripts/certs

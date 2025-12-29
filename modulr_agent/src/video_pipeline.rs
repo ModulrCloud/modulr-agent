@@ -83,8 +83,8 @@ impl VideoPipeline {
 
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGR")
-            .field("width", 640)
-            .field("height", 480)
+            .field("width", 1920)
+            .field("height", 1080)
             .build();
 
         let src = pipeline

@@ -7,6 +7,7 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
+use crate::commands::config::VideoSource;
 use crate::commands::config::read_config;
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
@@ -27,6 +28,85 @@ pub struct StartArgs {
     /// Allow not checking certificates on WebRTC link
     #[arg(long, default_value_t = false)]
     allow_skip_cert_check: bool,
+}
+
+#[cfg(not(feature = "zenoh"))]
+async fn configure_zenoh_camera_callback(
+    _pipeline: Arc<Mutex<VideoPipeline>>,
+    _webrtc_link: Arc<Mutex<WebRtcLink>>,
+) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "Zenoh is not enabled! Recompile application with zenoh feature enabled to use this video source."
+    ))
+}
+
+#[cfg(feature = "zenoh")]
+async fn configure_zenoh_camera_callback(
+    pipeline: Arc<Mutex<VideoPipeline>>,
+    webrtc_link: Arc<Mutex<WebRtcLink>>,
+) -> Result<()> {
+    use modulr_zenoh_interface::ZenohInterface;
+
+    info!("Zenoh video source in use. Setting up callback.");
+
+    // Create Zenoh video source with default configuration
+    let zenoh_source = Arc::new(ZenohInterface::default());
+
+    // Add frame listener
+    zenoh_source
+        .add_frame_listener(Box::new(move |data: &Bytes| {
+            let pipeline_clone = Arc::clone(&pipeline);
+            let webrtc_link_clone = Arc::clone(&webrtc_link);
+            let data_clone = data.clone();
+            Box::pin(async move {
+                // Only process frames when WebRTC is connected
+                if webrtc_link_clone.lock().await.is_connected().await {
+                    pipeline_clone
+                        .lock()
+                        .await
+                        .queue_frame(data_clone)
+                        .await
+                        .expect("Failed to write camera frame to pipeline!");
+                }
+            })
+        }))
+        .await;
+
+    // Start the Zenoh video source
+    zenoh_source.launch().await?;
+
+    info!("Zenoh video source started successfully");
+
+    Ok(())
+}
+
+async fn configure_ros_camera_callback(
+    pipeline: Arc<Mutex<VideoPipeline>>,
+    webrtc_link: Arc<Mutex<WebRtcLink>>,
+    bridge: Arc<Mutex<dyn RosBridge>>,
+) -> Result<()> {
+    info!("ROS video source in use. Setting up callback.");
+    bridge
+        .lock()
+        .await
+        .on_image_frame_received(Box::new(move |data: &Bytes| {
+            let pipeline_clone = Arc::clone(&pipeline);
+            let webrtc_link_clone = Arc::clone(&webrtc_link);
+            let data_clone = data.clone();
+            Box::pin(async move {
+                // Only process frames when WebRTC is connected
+                if webrtc_link_clone.lock().await.is_connected().await {
+                    pipeline_clone
+                        .lock()
+                        .await
+                        .queue_frame(data_clone)
+                        .await
+                        .expect("Failed to write camera frame to pipeline!");
+                }
+            })
+        }))
+        .await;
+    Ok(())
 }
 
 pub async fn start(args: StartArgs) -> Result<()> {
@@ -99,29 +179,20 @@ pub async fn start(args: StartArgs) -> Result<()> {
         }))
         .await;
 
-    // Robot frame -> Pipeline
-    let pipeline_clone = Arc::clone(&pipeline);
-    let webrtc_link_clone = Arc::clone(&webrtc_link);
-    bridge
-        .lock()
-        .await
-        .on_image_frame_received(Box::new(move |data: &Bytes| {
-            let pipeline_clone = Arc::clone(&pipeline_clone);
-            let webrtc_link_clone = Arc::clone(&webrtc_link_clone);
-            let data_clone = data.clone();
-            Box::pin(async move {
-                // Only process frames when WebRTC is connected
-                if webrtc_link_clone.lock().await.is_connected().await {
-                    pipeline_clone
-                        .lock()
-                        .await
-                        .queue_frame(data_clone)
-                        .await
-                        .expect("Failed to write camera frame to pipeline!");
-                }
-            })
-        }))
-        .await;
+    // Robot camera frame -> Pipeline
+    match config.video_source {
+        VideoSource::Zenoh => {
+            configure_zenoh_camera_callback(Arc::clone(&pipeline), Arc::clone(&webrtc_link)).await?
+        }
+        VideoSource::Ros => {
+            configure_ros_camera_callback(
+                Arc::clone(&pipeline),
+                Arc::clone(&webrtc_link),
+                Arc::clone(&bridge),
+            )
+            .await?
+        }
+    };
 
     info!("Starting all tasks running");
 
@@ -143,7 +214,8 @@ pub async fn start(args: StartArgs) -> Result<()> {
         debug!("Finished launching video pipeline");
         Ok::<(), VideoPipelineError>(())
     });
-    if let Err(e) = bridge.lock().await.launch().await {
+    let enable_ros_video = config.video_source == VideoSource::Ros;
+    if let Err(e) = bridge.lock().await.launch(enable_ros_video).await {
         log::error!("{}", e);
         return Err(e.into());
     };

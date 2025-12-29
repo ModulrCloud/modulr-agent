@@ -12,5 +12,5 @@ pub trait RosBridge: Send {
         &mut self,
         command: &MovementCommand,
     ) -> Result<(), RosBridgeError>;
-    async fn launch(&self) -> Result<(), RosBridgeError>;
+    async fn launch(&self, enable_video: bool) -> Result<(), RosBridgeError>;
 }

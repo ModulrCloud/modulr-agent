@@ -1,9 +1,7 @@
-use crate::ros_bridge::{
-    RosBridge, RosBridgeError,
-    ros2_messages::{
-        geometry_msgs::{Twist, TwistStamped, Vector3},
-        sensor_msgs::Image,
-    },
+use crate::ros_bridge::{RosBridge, RosBridgeError};
+use modulr_ros_messages::ros2_messages::{
+    geometry_msgs::{Twist, TwistStamped, Vector3},
+    sensor_msgs::Image,
 };
 
 use std::sync::Arc;
@@ -34,7 +32,7 @@ impl Ros2Bridge {
 
 #[async_trait]
 impl RosBridge for Ros2Bridge {
-    async fn launch(&self) -> Result<(), super::RosBridgeError> {
+    async fn launch(&self, enable_video: bool) -> Result<(), super::RosBridgeError> {
         let ros = ClientHandle::new("ws://localhost:9090")
             .await
             .map_err(|_| RosBridgeError::InitFailure)?;
@@ -44,24 +42,26 @@ impl RosBridge for Ros2Bridge {
             .await
             .map_err(|_| RosBridgeError::PublisherCreateFailure)?;
 
-        let image_sub = ros
-            .subscribe::<Image>("/camera/image_raw")
-            .await
-            .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
+        if enable_video {
+            log::info!("ROS2 video enabled. Subscribing to `/camera/image_raw`.");
+            let image_sub = ros
+                .subscribe::<Image>("/camera/image_raw")
+                .await
+                .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
+            let listeners = Arc::clone(&self.image_listeners);
+            tokio::spawn(async move {
+                loop {
+                    let msg = image_sub.next().await;
+                    let buffer = Bytes::from(msg.data);
+                    for listener in listeners.lock().await.iter_mut() {
+                        listener(&buffer).await;
+                    }
+                }
+            });
+        }
 
         self.bridge_handle.lock().await.replace(ros);
         self.mvmt_pub.lock().await.replace(mvmt_pub);
-
-        let listeners = Arc::clone(&self.image_listeners);
-        tokio::spawn(async move {
-            loop {
-                let msg = image_sub.next().await;
-                let buffer = Bytes::from(msg.data);
-                for listener in listeners.lock().await.iter_mut() {
-                    listener(&buffer).await;
-                }
-            }
-        });
 
         Ok(())
     }
