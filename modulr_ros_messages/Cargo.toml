@@ -1,0 +1,10 @@
+[package]
+name = "modulr_ros_messages"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+roslibrust = { version = "0.18.0", features = ["codegen"] }
+
+[dependencies]
+roslibrust = { version = "0.18.0", features = ["codegen"] }

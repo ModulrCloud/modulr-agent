@@ -1,4 +1,5 @@
 use crate::{
+    commands::config::ImageFormat,
     ros_bridge::{OnCameraImageHdlrFn, RosBridgeError},
     webrtc_message::MovementCommand,
 };
@@ -12,5 +13,8 @@ pub trait RosBridge: Send {
         &mut self,
         command: &MovementCommand,
     ) -> Result<(), RosBridgeError>;
-    async fn launch(&self) -> Result<(), RosBridgeError>;
+    /// Launch the ROS bridge.
+    /// If `image_format` is `Some`, video subscription will be enabled using the specified format.
+    /// If `None`, video subscription is disabled.
+    async fn launch(&self, image_format: Option<ImageFormat>) -> Result<(), RosBridgeError>;
 }

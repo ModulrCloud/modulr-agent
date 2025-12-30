@@ -11,6 +11,13 @@ fn generate_messages(
     std::fs::write(dest_path, source.to_string())?;
 
     for path in &dependent_paths {
+        // Skip files causing over-eager rebuilds as per https://github.com/RosLibRust/roslibrust/issues/292
+        if path.ends_with("Duration.msg")
+            || path.ends_with("Time.msg")
+            || path.ends_with("ServiceEventInfo.msg")
+        {
+            continue;
+        }
         println!("cargo:rerun-if-changed={}", path.display());
     }
 
