@@ -65,7 +65,7 @@ impl VideoPipeline {
                 appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
                 videoconvert !
                 nvvidconv !
-                video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
+                video/x-raw(memory:NVMM),format=NV12,width=1920,height=1080,framerate=0/1 !
                 nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
                 h264parse !
                 appsink name=sink max-buffers=1 drop=true
@@ -88,7 +88,7 @@ impl VideoPipeline {
                 jpegdec !
                 videoconvert !
                 nvvidconv !
-                video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
+                video/x-raw(memory:NVMM),format=NV12,width=1920,height=1080,framerate=0/1 !
                 nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
                 h264parse !
                 appsink name=sink max-buffers=1 drop=true
