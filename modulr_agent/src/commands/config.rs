@@ -4,6 +4,8 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+pub use modulr_agent_common::ImageFormat;
+
 #[derive(Parser, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
 pub enum VideoSource {
     Ros,
@@ -15,6 +17,8 @@ pub struct AgentConfig {
     pub robot_id: String,
     pub signaling_url: String,
     pub video_source: VideoSource,
+    #[serde(default)]
+    pub image_format: ImageFormat,
 }
 
 pub fn get_default_path() -> Option<PathBuf> {
@@ -74,6 +78,7 @@ mod tests {
             robot_id: "my_robot_id".to_string(),
             signaling_url: "my_signaling_url".to_string(),
             video_source: VideoSource::Ros,
+            image_format: ImageFormat::Raw,
         };
         let serialized = serde_json::to_string_pretty(&config).unwrap();
         println!("Serialized config: {}", serialized);
@@ -91,6 +96,7 @@ mod tests {
             robot_id: "my_robot_id".to_string(),
             signaling_url: "my_signaling_url".to_string(),
             video_source: VideoSource::Ros,
+            image_format: ImageFormat::Jpeg,
         };
         let temp_file = NamedTempFile::new().unwrap();
         write_config(&config, Some(temp_file.path().to_path_buf())).unwrap();

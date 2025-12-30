@@ -25,6 +25,7 @@ base64 = "0.22.1"
 clap = { version = "4.5.52", features = ["derive"] }
 dirs = "6.0.0"
 rustls = { version = "0.21", features = ["dangerous_configuration"] }
+modulr_agent_common = { path = "../modulr_agent_common" }
 modulr_ros_messages = { path = "../modulr_ros_messages" }
 modulr_zenoh_interface = { path = "../modulr_zenoh_interface", optional = true }
 

@@ -11,6 +11,8 @@ use log::info;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+use crate::commands::config::ImageFormat;
+
 pub type OnFrameReadyHandlerFn =
     Box<dyn (FnMut(&Bytes) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync>;
 
@@ -38,14 +40,16 @@ pub struct VideoPipeline {
     appsrc: Arc<Mutex<Option<AppSrc>>>,
     frame_listeners: Arc<Mutex<Vec<OnFrameReadyHandlerFn>>>,
     pipeline: Option<Pipeline>,
+    image_format: ImageFormat,
 }
 
 impl VideoPipeline {
-    pub fn new() -> Self {
+    pub fn new(image_format: ImageFormat) -> Self {
         Self {
             appsrc: Arc::new(Mutex::new(None)),
             frame_listeners: Arc::new(Mutex::new(vec![])),
             pipeline: None,
+            image_format,
         }
     }
 
@@ -54,26 +58,53 @@ impl VideoPipeline {
         gst::init().map_err(|_| VideoPipelineError::GStreamerInitFailure)?;
 
         let use_hw = gst::ElementFactory::find("nvv4l2h264enc").is_some();
-        let pipeline_str = if use_hw {
-            log::info!("Using Jetson hardware H.264 encoder");
-            "
-            appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
-            videoconvert !
-            nvvidconv !
-            video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
-            nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
-            h264parse !
-            appsink name=sink max-buffers=1 drop=true
-            "
-        } else {
-            log::warn!("Falling back to x264enc (software)");
-            "
-            appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
-            videoconvert !
-            x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 byte-stream=true !
-            video/x-h264,stream-format=byte-stream,profile=baseline !
-            appsink name=sink max-buffers=1 drop=true
-            "
+        let pipeline_str = match (self.image_format, use_hw) {
+            (ImageFormat::Raw, true) => {
+                log::info!("Using raw input with Jetson hardware H.264 encoder");
+                "
+                appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
+                videoconvert !
+                nvvidconv !
+                video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
+                nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
+                h264parse !
+                appsink name=sink max-buffers=1 drop=true
+                "
+            }
+            (ImageFormat::Raw, false) => {
+                log::warn!("Using raw input with x264enc (software)");
+                "
+                appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
+                videoconvert !
+                x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 byte-stream=true !
+                video/x-h264,stream-format=byte-stream,profile=baseline !
+                appsink name=sink max-buffers=1 drop=true
+                "
+            }
+            (ImageFormat::Jpeg, true) => {
+                log::info!("Using JPEG input with Jetson hardware H.264 encoder");
+                "
+                appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
+                jpegdec !
+                videoconvert !
+                nvvidconv !
+                video/x-raw(memory:NVMM),format=NV12,width=640,height=480,framerate=0/1 !
+                nvv4l2h264enc insert-sps-pps=true iframeinterval=30 bitrate=8000000 !
+                h264parse !
+                appsink name=sink max-buffers=1 drop=true
+                "
+            }
+            (ImageFormat::Jpeg, false) => {
+                log::warn!("Using JPEG input with x264enc (software)");
+                "
+                appsrc name=src is-live=true do-timestamp=true format=time max-bytes=0 block=false !
+                jpegdec !
+                videoconvert !
+                x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 byte-stream=true !
+                video/x-h264,stream-format=byte-stream,profile=baseline !
+                appsink name=sink max-buffers=1 drop=true
+                "
+            }
         };
 
         let pipeline = gst::parse::launch(pipeline_str)
@@ -81,11 +112,14 @@ impl VideoPipeline {
             .downcast::<gst::Pipeline>()
             .map_err(|_| VideoPipelineError::GStreamerDowncastFailure)?;
 
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "BGR")
-            .field("width", 1920)
-            .field("height", 1080)
-            .build();
+        let caps = match self.image_format {
+            ImageFormat::Raw => gst::Caps::builder("video/x-raw")
+                .field("format", "BGR")
+                .field("width", 1920)
+                .field("height", 1080)
+                .build(),
+            ImageFormat::Jpeg => gst::Caps::builder("image/jpeg").build(),
+        };
 
         let src = pipeline
             .by_name("src")

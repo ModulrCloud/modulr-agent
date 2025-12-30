@@ -1,8 +1,9 @@
+use crate::commands::config::ImageFormat;
 use crate::ros_bridge::ros_bridge_trait::RosBridge;
 use crate::ros_bridge::{OnCameraImageHdlrFn, RosBridgeError};
 use modulr_ros_messages::ros1_messages::{
     geometry_msgs::{Twist, Vector3},
-    sensor_msgs::Image,
+    sensor_msgs::{CompressedImage, Image},
 };
 
 use std::sync::Arc;
@@ -31,7 +32,7 @@ impl Ros1Bridge {
 
 #[async_trait]
 impl RosBridge for Ros1Bridge {
-    async fn launch(&self, enable_video: bool) -> Result<(), super::RosBridgeError> {
+    async fn launch(&self, image_format: Option<ImageFormat>) -> Result<(), super::RosBridgeError> {
         let nh = NodeHandle::new("http://localhost:11311", "modulr_agent")
             .await
             .map_err(|_| RosBridgeError::InitFailure)?;
@@ -41,21 +42,43 @@ impl RosBridge for Ros1Bridge {
             .await
             .map_err(|_| RosBridgeError::PublisherCreateFailure)?;
 
-        if enable_video {
-            log::info!("ROS1 video enabled. Subscribing to `/camera/image_raw`.");
-            let mut image_sub = nh
-                .subscribe::<Image>("/camera/image_raw", 1)
-                .await
-                .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
-            let listeners = Arc::clone(&self.image_listeners);
-            tokio::spawn(async move {
-                while let Some(Ok(msg)) = image_sub.next().await {
-                    let buffer = Bytes::from(msg.data);
-                    for listener in listeners.lock().await.iter_mut() {
-                        listener(&buffer).await;
-                    }
+        if let Some(format) = image_format {
+            match format {
+                ImageFormat::Raw => {
+                    log::info!("ROS1 video enabled. Subscribing to `/camera/image_raw`.");
+                    let mut image_sub = nh
+                        .subscribe::<Image>("/camera/image_raw", 1)
+                        .await
+                        .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
+                    let listeners = Arc::clone(&self.image_listeners);
+                    tokio::spawn(async move {
+                        while let Some(Ok(msg)) = image_sub.next().await {
+                            let buffer = Bytes::from(msg.data);
+                            for listener in listeners.lock().await.iter_mut() {
+                                listener(&buffer).await;
+                            }
+                        }
+                    });
                 }
-            });
+                ImageFormat::Jpeg => {
+                    log::info!(
+                        "ROS1 video enabled. Subscribing to `/camera/image_raw/compressed`."
+                    );
+                    let mut image_sub = nh
+                        .subscribe::<CompressedImage>("/camera/image_raw/compressed", 1)
+                        .await
+                        .map_err(|_| RosBridgeError::SubscriptionCreateFailure)?;
+                    let listeners = Arc::clone(&self.image_listeners);
+                    tokio::spawn(async move {
+                        while let Some(Ok(msg)) = image_sub.next().await {
+                            let buffer = Bytes::from(msg.data);
+                            for listener in listeners.lock().await.iter_mut() {
+                                listener(&buffer).await;
+                            }
+                        }
+                    });
+                }
+            }
         }
 
         self.node_handle.lock().await.replace(nh);

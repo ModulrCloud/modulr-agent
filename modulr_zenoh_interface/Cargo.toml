@@ -8,6 +8,7 @@ bytes = "1.11.0"
 log = "0.4.29"
 serde = "1.0.228"
 zenoh = "1.7.1"
+modulr_agent_common = { path = "../modulr_agent_common" }
 modulr_ros_messages = { path = "../modulr_ros_messages" }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2.0.17"

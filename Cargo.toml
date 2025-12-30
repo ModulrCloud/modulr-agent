@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "modulr_agent",
+    "modulr_agent_common",
     "modulr_ros_messages",
     "modulr_zenoh_interface",
 ]

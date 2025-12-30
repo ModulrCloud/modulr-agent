@@ -3,14 +3,15 @@
 //! High-performance video frame transport using Zenoh pub/sub middleware.
 //!
 //! This crate provides [`ZenohInterface`], which subscribes to Zenoh topics containing
-//! video frames in ROS2 `sensor_msgs/Image` format (CDR serialized) and delivers the
-//! raw pixel data to registered listener callbacks.
-//! 
+//! video frames in ROS2 `sensor_msgs/Image` or `sensor_msgs/CompressedImage` format
+//! (CDR serialized) and delivers the image data to registered listener callbacks.
+//!
 //! For examples, see the files in the `examples` folder.
 
 use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
+pub use modulr_agent_common::ImageFormat;
 use modulr_ros_messages::ros2_messages::sensor_msgs;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -49,14 +50,16 @@ pub enum ZenohInterfaceError {
 
 /// Interface for receiving video frames over Zenoh.
 ///
-/// `ZenohInterface` subscribes to the `camera/image_raw` Zenoh topic, deserializes
-/// incoming `sensor_msgs::Image` messages from CDR format, and delivers the raw pixel
-/// data to registered listener callbacks.
+/// `ZenohInterface` subscribes to Zenoh topics for video frames, deserializes
+/// incoming messages from CDR format, and delivers the image data to registered
+/// listener callbacks.
 ///
-/// # Topic
+/// # Topics
 ///
-/// The default topic is `camera/image_raw`. Messages must be CDR-serialized
-/// `sensor_msgs::Image` structs (little-endian).
+/// - For `ImageFormat::Raw`: subscribes to `camera/image_raw` expecting `sensor_msgs::Image`
+/// - For `ImageFormat::Jpeg`: subscribes to `camera/image_raw/compressed` expecting `sensor_msgs::CompressedImage`
+///
+/// Messages must be CDR-serialized (little-endian).
 ///
 /// # Lifecycle
 ///
@@ -68,11 +71,12 @@ pub enum ZenohInterfaceError {
 /// encounters an error.
 pub struct ZenohInterface {
     image_listeners: Arc<Mutex<Vec<OnFrameReceivedFn>>>,
+    image_format: ImageFormat,
 }
 
 impl Default for ZenohInterface {
     fn default() -> Self {
-        Self::new()
+        Self::new(ImageFormat::Raw)
     }
 }
 
@@ -81,9 +85,10 @@ impl ZenohInterface {
     ///
     /// Call [`add_frame_listener`](Self::add_frame_listener) to register callbacks
     /// before calling [`launch`](Self::launch).
-    pub fn new() -> Self {
+    pub fn new(image_format: ImageFormat) -> Self {
         Self {
             image_listeners: Arc::new(Mutex::new(vec![])),
+            image_format,
         }
     }
 
@@ -91,60 +96,120 @@ impl ZenohInterface {
     ///
     /// This method:
     /// 1. Opens a Zenoh session with default configuration
-    /// 2. Subscribes to the `camera/image_raw` topic
+    /// 2. Subscribes to the appropriate topic based on image format
     /// 3. Spawns a background task that receives and processes frames
     ///
     /// The background task will continue running until the subscription encounters
-    /// an error. Each received frame is deserialized from CDR format and the raw
-    /// pixel data is passed to all registered listeners.
+    /// an error. Each received frame is deserialized from CDR format and the
+    /// image data is passed to all registered listeners.
     pub async fn launch(&self) -> Result<(), ZenohInterfaceError> {
         log::info!("Launching Zenoh interface for grabbing camera frames.");
         let session = zenoh::open(zenoh::Config::default())
             .await
             .map_err(ZenohInterfaceError::SessionOpenFailure)?;
 
-        let subscriber = session
-            .declare_subscriber("camera/image_raw")
-            .await
-            .map_err(ZenohInterfaceError::SubscriptionFailed)?;
-
         let listeners = Arc::clone(&self.image_listeners);
-        log::info!("Spawning receiver task...");
-        tokio::spawn(async move {
-            // Keep session alive for the lifetime of this task
-            let _session = session;
-            log::info!("Receiver task started, waiting for samples...");
-            loop {
-                log::debug!("Waiting for next sample...");
-                let sample = match subscriber.recv_async().await {
-                    Ok(sample) => {
-                        log::debug!("Received sample with {} bytes", sample.payload().len());
-                        sample
-                    }
-                    Err(e) => {
-                        log::error!("Failed to receive camera frame: {e}");
-                        break;
-                    }
-                };
-                // Deserialize directly from the payload slice to avoid an extra copy
-                let payload = sample.payload();
-                let image: sensor_msgs::Image =
-                    match cdr::deserialize_from(payload.reader(), cdr::size::Infinite) {
-                        Ok(img) => img,
-                        Err(e) => {
-                            log::error!("Failed to deserialize Image message: {e}");
-                            continue;
+
+        match self.image_format {
+            ImageFormat::Raw => {
+                let subscriber = session
+                    .declare_subscriber("camera/image_raw")
+                    .await
+                    .map_err(ZenohInterfaceError::SubscriptionFailed)?;
+
+                log::info!("Spawning receiver task for raw images...");
+                tokio::spawn(async move {
+                    // Keep session alive for the lifetime of this task
+                    let _session = session;
+                    log::info!("Receiver task started, waiting for samples...");
+                    loop {
+                        log::debug!("Waiting for next sample...");
+                        let sample = match subscriber.recv_async().await {
+                            Ok(sample) => {
+                                log::debug!(
+                                    "Received sample with {} bytes",
+                                    sample.payload().len()
+                                );
+                                sample
+                            }
+                            Err(e) => {
+                                log::error!("Failed to receive camera frame: {e}");
+                                break;
+                            }
+                        };
+                        // Deserialize directly from the payload slice to avoid an extra copy
+                        let payload = sample.payload();
+                        let image: sensor_msgs::Image =
+                            match cdr::deserialize_from(payload.reader(), cdr::size::Infinite) {
+                                Ok(img) => img,
+                                Err(e) => {
+                                    log::error!("Failed to deserialize Image message: {e}");
+                                    continue;
+                                }
+                            };
+                        log::debug!("Deserialized image: {}x{}", image.width, image.height);
+                        let buffer = Bytes::from(image.data);
+                        let listener_count = listeners.lock().await.len();
+                        log::debug!("Notifying {} listeners", listener_count);
+                        for listener in listeners.lock().await.iter() {
+                            listener(&buffer).await;
                         }
-                    };
-                log::debug!("Deserialized image: {}x{}", image.width, image.height);
-                let buffer = Bytes::from(image.data);
-                let listener_count = listeners.lock().await.len();
-                log::debug!("Notifying {} listeners", listener_count);
-                for listener in listeners.lock().await.iter() {
-                    listener(&buffer).await;
-                }
+                    }
+                });
             }
-        });
+            ImageFormat::Jpeg => {
+                let subscriber = session
+                    .declare_subscriber("camera/image_raw/compressed")
+                    .await
+                    .map_err(ZenohInterfaceError::SubscriptionFailed)?;
+
+                log::info!("Spawning receiver task for compressed images...");
+                tokio::spawn(async move {
+                    // Keep session alive for the lifetime of this task
+                    let _session = session;
+                    log::info!("Receiver task started, waiting for samples...");
+                    loop {
+                        log::debug!("Waiting for next sample...");
+                        let sample = match subscriber.recv_async().await {
+                            Ok(sample) => {
+                                log::debug!(
+                                    "Received sample with {} bytes",
+                                    sample.payload().len()
+                                );
+                                sample
+                            }
+                            Err(e) => {
+                                log::error!("Failed to receive camera frame: {e}");
+                                break;
+                            }
+                        };
+                        // Deserialize directly from the payload slice to avoid an extra copy
+                        let payload = sample.payload();
+                        let image: sensor_msgs::CompressedImage =
+                            match cdr::deserialize_from(payload.reader(), cdr::size::Infinite) {
+                                Ok(img) => img,
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to deserialize CompressedImage message: {e}"
+                                    );
+                                    continue;
+                                }
+                            };
+                        log::debug!(
+                            "Deserialized compressed image: {} bytes, format: {}",
+                            image.data.len(),
+                            image.format
+                        );
+                        let buffer = Bytes::from(image.data);
+                        let listener_count = listeners.lock().await.len();
+                        log::debug!("Notifying {} listeners", listener_count);
+                        for listener in listeners.lock().await.iter() {
+                            listener(&buffer).await;
+                        }
+                    }
+                });
+            }
+        }
         Ok(())
     }
 

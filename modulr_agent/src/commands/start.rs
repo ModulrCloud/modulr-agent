@@ -7,8 +7,7 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
-use crate::commands::config::VideoSource;
-use crate::commands::config::read_config;
+use crate::commands::config::{read_config, ImageFormat, VideoSource};
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
 use crate::ros_bridge::RosBridge;
@@ -34,6 +33,7 @@ pub struct StartArgs {
 async fn configure_zenoh_camera_callback(
     _pipeline: Arc<Mutex<VideoPipeline>>,
     _webrtc_link: Arc<Mutex<WebRtcLink>>,
+    _image_format: ImageFormat,
 ) -> Result<()> {
     Err(anyhow::anyhow!(
         "Zenoh is not enabled! Recompile application with zenoh feature enabled to use this video source."
@@ -44,13 +44,14 @@ async fn configure_zenoh_camera_callback(
 async fn configure_zenoh_camera_callback(
     pipeline: Arc<Mutex<VideoPipeline>>,
     webrtc_link: Arc<Mutex<WebRtcLink>>,
+    image_format: ImageFormat,
 ) -> Result<()> {
     use modulr_zenoh_interface::ZenohInterface;
 
     info!("Zenoh video source in use. Setting up callback.");
 
-    // Create Zenoh video source with default configuration
-    let zenoh_source = Arc::new(ZenohInterface::default());
+    // Create Zenoh video source with specified image format
+    let zenoh_source = Arc::new(ZenohInterface::new(image_format));
 
     // Add frame listener
     zenoh_source
@@ -119,7 +120,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         &signaling_url,
         args.allow_skip_cert_check,
     )));
-    let pipeline = Arc::new(Mutex::new(VideoPipeline::new()));
+    let pipeline = Arc::new(Mutex::new(VideoPipeline::new(config.image_format)));
 
     let bridge: Arc<Mutex<dyn RosBridge>> = if ROS1 {
         Arc::new(Mutex::new(Ros1Bridge::new()))
@@ -180,9 +181,20 @@ pub async fn start(args: StartArgs) -> Result<()> {
         .await;
 
     // Robot camera frame -> Pipeline
+    // Determine which image format to use for the video source
+    let ros_image_format = match config.video_source {
+        VideoSource::Ros => Some(config.image_format),
+        VideoSource::Zenoh => None, // Zenoh handles its own subscription
+    };
+
     match config.video_source {
         VideoSource::Zenoh => {
-            configure_zenoh_camera_callback(Arc::clone(&pipeline), Arc::clone(&webrtc_link)).await?
+            configure_zenoh_camera_callback(
+                Arc::clone(&pipeline),
+                Arc::clone(&webrtc_link),
+                config.image_format,
+            )
+            .await?
         }
         VideoSource::Ros => {
             configure_ros_camera_callback(
@@ -214,8 +226,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         debug!("Finished launching video pipeline");
         Ok::<(), VideoPipelineError>(())
     });
-    let enable_ros_video = config.video_source == VideoSource::Ros;
-    if let Err(e) = bridge.lock().await.launch(enable_ros_video).await {
+    if let Err(e) = bridge.lock().await.launch(ros_image_format).await {
         log::error!("{}", e);
         return Err(e.into());
     };
