@@ -8,7 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository }}/cross
 
 jobs:
   # Build and push Cross Docker images to GHCR (only when dockerfiles change)
@@ -42,11 +41,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set image name
+        id: image
+        run: echo "name=$(echo '${{ github.repository }}/cross-${{ matrix.target }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.target }}
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest
             type=sha,prefix=
@@ -117,18 +120,19 @@ jobs:
 
       - name: Configure Cross to use GHCR images
         run: |
+          REPO_LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
           cat > Cross.toml << EOF
           [build]
           default-target = "x86_64-unknown-linux-gnu"
 
           [target.x86_64-unknown-linux-gnu]
-          image = "ghcr.io/${{ github.repository }}/cross-x86_64-unknown-linux-gnu:latest"
+          image = "ghcr.io/${REPO_LOWER}/cross-x86_64-unknown-linux-gnu:latest"
 
           [target.aarch64-unknown-linux-gnu]
-          image = "ghcr.io/${{ github.repository }}/cross-aarch64-unknown-linux-gnu:latest"
+          image = "ghcr.io/${REPO_LOWER}/cross-aarch64-unknown-linux-gnu:latest"
 
           [target.armv7-unknown-linux-gnueabihf]
-          image = "ghcr.io/${{ github.repository }}/cross-armv7-unknown-linux-gnueabihf:latest"
+          image = "ghcr.io/${REPO_LOWER}/cross-armv7-unknown-linux-gnueabihf:latest"
           EOF
 
       - name: Build with Cross
