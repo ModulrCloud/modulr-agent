@@ -7,7 +7,7 @@ RUN apt-get update && \
 # Install rustup and add clippy/rustfmt for linting
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
-RUN rustup component add clippy rustfmt
+RUN rustup default stable && rustup component add clippy rustfmt
 
 # Use clang instead of gcc
 ENV CC=clang
