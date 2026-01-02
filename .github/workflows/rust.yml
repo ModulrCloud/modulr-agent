@@ -115,9 +115,7 @@ jobs:
   cross-build:
     name: Cross-Build Targets
     runs-on: ubuntu-latest
-    needs:
-      - build-cross-images
-      - lint-and-test
+    needs: build-cross-images
     permissions:
       contents: read
       packages: read
