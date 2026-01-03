@@ -199,4 +199,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: modulr-agent-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/
+          path: target/${{ matrix.target }}/release/modulr_agent
