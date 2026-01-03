@@ -7,7 +7,7 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
-use crate::commands::config::{read_config, ImageFormat, VideoSource};
+use crate::commands::config::{ImageFormat, VideoSource, read_config};
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
 use crate::ros_bridge::RosBridge;
