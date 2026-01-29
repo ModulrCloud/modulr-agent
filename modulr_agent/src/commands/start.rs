@@ -15,7 +15,11 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::WebRtcMessage;
+use crate::webrtc_message::{
+    MessageEnvelope,
+    extract_movement_command,
+    MSG_TYPE_MOVEMENT,
+};
 
 const ROS1: bool = false;
 
@@ -135,18 +139,25 @@ pub async fn start(args: StartArgs) -> Result<()> {
     webrtc_link
         .lock()
         .await
-        .on_webrtc_message(Box::new(move |msg: &WebRtcMessage| {
+        .on_webrtc_message(Box::new(move |envelope: &MessageEnvelope| {
             let bridge_clone = Arc::clone(&bridge_clone);
-            let msg_clone = msg.clone();
+            let envelope_clone = envelope.clone();
             Box::pin(async move {
-                match msg_clone {
-                    WebRtcMessage::MovementCommand(cmd) => {
-                        bridge_clone
-                            .lock()
-                            .await
-                            .post_movement_command(&cmd)
-                            .await
-                            .expect("Failed to post movement command!");
+                if envelope_clone.message_type == MSG_TYPE_MOVEMENT {
+                    match extract_movement_command(&envelope_clone) {
+                        Ok(cmd) => {
+                            if let Err(e) = bridge_clone
+                                .lock()
+                                .await
+                                .post_movement_command(&cmd)
+                                .await
+                            {
+                                error!("Failed to post movement command: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Invalid movement payload: {}", e);
+                        }
                     }
                 }
             })
