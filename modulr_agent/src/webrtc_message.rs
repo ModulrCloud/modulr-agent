@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 
 //Constants
-pub const PROTOCOL_VERSION: &str = "0.1";
+pub const PROTOCOL_VERSION: &str = "0.0";
 pub const MSG_TYPE_PING: &str = "agent.ping";
 pub const MSG_TYPE_PONG: &str = "agent.pong";
 pub const MSG_TYPE_MOVEMENT: &str = "agent.movement";
@@ -12,7 +12,7 @@ pub const MSG_TYPE_ERROR: &str = "agent.error";
 pub const MSG_TYPE_CAPABILITIES: &str = "agent.capabilities";
 
 
-pub const SUPPORTED_VERSIONS: &[&str] = &["0.1"];
+pub const SUPPORTED_VERSIONS: &[&str] = &["0.0"];
 
 // Common envelope for all protocol messages
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -436,7 +436,7 @@ mod tests {
             ErrorCode::MovementFailed,
             "Robot hit obstacle",
             Some("msg-123"),
-            None,
+            None,0.1
         );
         assert_eq!(error.message_type, MSG_TYPE_ERROR);
         assert_eq!(error.correlation_id, Some("msg-123".to_string()));
@@ -534,13 +534,13 @@ mod tests {
         let payload = extract_capabilities_payload(&msg).unwrap();
         
         assert!(!payload.versions.is_empty());
-        assert!(payload.versions.contains(&"0.1".to_string()));
+        assert!(payload.versions.contains(&"0.0".to_string()));
     }
     #[test]
     fn test_parse_ping_from_json() {
         let json = r#"{
             "type": "agent.ping",
-            "version": "0.1",
+            "version": "0.0",
             "id": "test-id",
             "timestamp": "2024-01-01T00:00:00Z"
         }"#;
@@ -553,7 +553,7 @@ mod tests {
     fn test_parse_movement_from_json() {
         let json = r#"{
             "type": "agent.movement",
-            "version": "0.1",
+            "version": "0.0",
             "id": "test-id",
             "timestamp": "2024-01-01T00:00:00Z",
             "payload": {
@@ -588,7 +588,7 @@ mod tests {
     fn test_validate_envelope_missing_type() {
         let msg = MessageEnvelope {
             message_type: "".to_string(),
-            version: "0.1".to_string(),
+            version: "0.0".to_string(),
             id: "123".to_string(),
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             correlation_id: None,
@@ -605,7 +605,7 @@ mod tests {
     fn test_validate_envelope_bad_version() {
         let msg = MessageEnvelope {
             message_type: MSG_TYPE_PING.to_string(),
-            version: "0.1.2".to_string(),
+            version: "0.0.2".to_string(),
             id: "123".to_string(),
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             correlation_id: None,
@@ -632,16 +632,16 @@ mod tests {
 
     #[test]
     fn test_is_version_supported() {
-        assert!(is_version_supported("0.1"));
+        assert!(is_version_supported("0.0"));
         assert!(!is_version_supported("0.5"));
         assert!(!is_version_supported("1.0"));
     }
 
     #[test]
     fn test_negotiate_version() {
-        let remote = vec!["0.1".to_string(), "0.2".to_string()];
+        let remote = vec!["0.0".to_string(), "0.2".to_string()];
         let negotiated = negotiate_version(&remote);
-        assert_eq!(negotiated, Some("0.1".to_string()));
+        assert_eq!(negotiated, Some("0.0".to_string()));
     }
 
     #[test]
