@@ -235,19 +235,6 @@ pub fn create_capabilities() -> MessageEnvelope {
     }
 }
 
-// Creates an agent.capabilities message 
-pub fn create_capabilities_with_versions(versions: Vec<String>) -> MessageEnvelope {
-    MessageEnvelope {
-        message_type: MSG_TYPE_CAPABILITIES.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: None,
-        payload: Some(serde_json::to_value(CapabilitiesPayload { versions }).unwrap()),
-        meta: None,
-    }
-}
-
 // Extract capabilities payload from an envelope
 pub fn extract_capabilities_payload(
     envelope: &MessageEnvelope,
