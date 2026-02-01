@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 //Constants
 pub const PROTOCOL_VERSION: &str = "0.0";
 pub const MSG_TYPE_PING: &str = "agent.ping";
@@ -11,14 +10,12 @@ pub const MSG_TYPE_MOVEMENT: &str = "agent.movement";
 pub const MSG_TYPE_ERROR: &str = "agent.error";
 pub const MSG_TYPE_CAPABILITIES: &str = "agent.capabilities";
 
-
 pub const SUPPORTED_VERSIONS: &[&str] = &["0.0"];
 
 // Common envelope for all protocol messages
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageEnvelope {
-
     //Required
     #[serde(rename = "type")]
     pub message_type: String,
@@ -37,9 +34,7 @@ pub struct MessageEnvelope {
     pub meta: Option<serde_json::Value>,
 }
 
-
-
-// Generate a simple unique ID -- what is the standard approach we are supposed to be using here 
+// Generate a simple unique ID -- what is the standard approach we are supposed to be using here
 pub fn generate_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()
@@ -66,21 +61,19 @@ pub fn create_ping() -> MessageEnvelope {
     }
 }
 
-
 pub fn create_pong(ping_id: &str) -> MessageEnvelope {
     MessageEnvelope {
         message_type: MSG_TYPE_PONG.to_string(),
         version: PROTOCOL_VERSION.to_string(),
         id: generate_id(),
         timestamp: generate_timestamp(),
-        correlation_id: Some(ping_id.to_string()), 
+        correlation_id: Some(ping_id.to_string()),
         payload: None,
         meta: None,
     }
 }
 
-
-// Movement payload 
+// Movement payload
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MovementCommand {
     pub forward: f64,
@@ -142,7 +135,6 @@ pub fn extract_movement_command(envelope: &MessageEnvelope) -> Result<MovementCo
     Ok(movement)
 }
 
-
 // Allowed error messeges
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -158,7 +150,7 @@ pub enum ErrorCode {
     InternalError,
 }
 
-// Error payload 
+// Error payload
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ErrorPayload {
     pub code: ErrorCode,
@@ -206,18 +198,16 @@ pub fn extract_error_payload(envelope: &MessageEnvelope) -> Result<ErrorPayload,
         .as_ref()
         .ok_or("Error message requires payload")?;
 
-    serde_json::from_value(payload.clone())
-        .map_err(|e| format!("Invalid error payload: {}", e))
+    serde_json::from_value(payload.clone()).map_err(|e| format!("Invalid error payload: {}", e))
 }
 
-
-// Capabilities payload 
+// Capabilities payload
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CapabilitiesPayload {
     pub versions: Vec<String>,
 }
 
-// Creates an agent.capabilities message 
+// Creates an agent.capabilities message
 pub fn create_capabilities() -> MessageEnvelope {
     MessageEnvelope {
         message_type: MSG_TYPE_CAPABILITIES.to_string(),
@@ -255,7 +245,7 @@ pub fn extract_capabilities_payload(
         .map_err(|e| format!("Invalid capabilities payload: {}", e))
 }
 
-// Check if a version is supported 
+// Check if a version is supported
 pub fn is_version_supported(version: &str) -> bool {
     SUPPORTED_VERSIONS.contains(&version)
 }
@@ -271,7 +261,6 @@ pub fn negotiate_version(remote_versions: &[String]) -> Option<String> {
     compatible.sort();
     compatible.last().map(|s| s.to_string())
 }
-
 
 // Parse incoming JSON into a MessageEnvelope
 pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, String> {
@@ -309,32 +298,26 @@ pub fn validate_envelope(envelope: &MessageEnvelope) -> Result<(), String> {
 // Route a message based on its type and return appropriate response
 pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
     match envelope.message_type.as_str() {
-        MSG_TYPE_PING => {
-            Some(create_pong(&envelope.id))
-        }
+        MSG_TYPE_PING => Some(create_pong(&envelope.id)),
         MSG_TYPE_PONG => {
             println!("Received pong for message: {:?}", envelope.correlation_id);
             None
         }
-        MSG_TYPE_MOVEMENT => {
-            match extract_movement_command(envelope) {
-                Ok(movement) => {
-                    println!(
-                        "Movement command: forward={}, turn={}", 
-                        movement.forward, movement.turn
-                    );
-                    None
-                }
-                Err(e) => {
-                    Some(create_error(
-                        ErrorCode::InvalidPayload,
-                        &e,
-                        Some(&envelope.id),
-                        None,
-                    ))
-                }
+        MSG_TYPE_MOVEMENT => match extract_movement_command(envelope) {
+            Ok(movement) => {
+                println!(
+                    "Movement command: forward={}, turn={}",
+                    movement.forward, movement.turn
+                );
+                None
             }
-        }
+            Err(e) => Some(create_error(
+                ErrorCode::InvalidPayload,
+                &e,
+                Some(&envelope.id),
+                None,
+            )),
+        },
         MSG_TYPE_ERROR => {
             match extract_error_payload(envelope) {
                 Ok(error) => {
@@ -375,24 +358,16 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
             }
             Some(create_capabilities())
         }
-        _ => {
-            Some(create_error(
-                ErrorCode::UnsupportedMessageType,
-                &format!("Unknown message type: {}", envelope.message_type),
-                Some(&envelope.id),
-                None,
-            ))
-        }
+        _ => Some(create_error(
+            ErrorCode::UnsupportedMessageType,
+            &format!("Unknown message type: {}", envelope.message_type),
+            Some(&envelope.id),
+            None,
+        )),
     }
 }
 
-
-
-
-
-
-
-//unit tests 
+//unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,7 +411,7 @@ mod tests {
             ErrorCode::MovementFailed,
             "Robot hit obstacle",
             Some("msg-123"),
-            None,0.1
+            None,
         );
         assert_eq!(error.message_type, MSG_TYPE_ERROR);
         assert_eq!(error.correlation_id, Some("msg-123".to_string()));
@@ -454,7 +429,7 @@ mod tests {
         let original = create_ping();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(original.message_type, parsed.message_type);
         assert_eq!(original.id, parsed.id);
         assert_eq!(original.version, parsed.version);
@@ -465,10 +440,10 @@ mod tests {
         let original = create_movement(0.75, -0.25).unwrap();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(original.message_type, parsed.message_type);
         assert_eq!(original.id, parsed.id);
-        
+
         let orig_payload = extract_movement_command(&original).unwrap();
         let parsed_payload = extract_movement_command(&parsed).unwrap();
         assert_eq!(orig_payload.forward, parsed_payload.forward);
@@ -477,15 +452,10 @@ mod tests {
 
     #[test]
     fn test_error_roundtrip() {
-        let original = create_error(
-            ErrorCode::ValidationFailed,
-            "Invalid input",
-            None,
-            None,
-        );
+        let original = create_error(ErrorCode::ValidationFailed, "Invalid input", None, None);
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(original.message_type, parsed.message_type);
         assert_eq!(original.id, parsed.id);
     }
@@ -494,36 +464,30 @@ mod tests {
     fn test_json_field_names() {
         let ping = create_ping();
         let json = serde_json::to_string(&ping).unwrap();
-        
+
         assert!(json.contains("\"type\""));
         assert!(!json.contains("\"message_type\""));
-        
+
         let pong = create_pong("test");
         let pong_json = serde_json::to_string(&pong).unwrap();
         assert!(pong_json.contains("\"correlationId\""));
         assert!(!pong_json.contains("\"correlation_id\""));
     }
 
-
     #[test]
     fn test_extract_movement_command() {
         let msg = create_movement(0.6, -0.2).unwrap();
         let payload = extract_movement_command(&msg).unwrap();
-        
+
         assert_eq!(payload.forward, 0.6);
         assert_eq!(payload.turn, -0.2);
     }
 
     #[test]
     fn test_extract_error_payload() {
-        let msg = create_error(
-            ErrorCode::MovementFailed,
-            "Test error",
-            None,
-            None,
-        );
+        let msg = create_error(ErrorCode::MovementFailed, "Test error", None, None);
         let payload = extract_error_payload(&msg).unwrap();
-        
+
         assert_eq!(payload.code, ErrorCode::MovementFailed);
         assert_eq!(payload.message, "Test error");
     }
@@ -532,7 +496,7 @@ mod tests {
     fn test_extract_capabilities_payload() {
         let msg = create_capabilities();
         let payload = extract_capabilities_payload(&msg).unwrap();
-        
+
         assert!(!payload.versions.is_empty());
         assert!(payload.versions.contains(&"0.0".to_string()));
     }
@@ -544,7 +508,7 @@ mod tests {
             "id": "test-id",
             "timestamp": "2024-01-01T00:00:00Z"
         }"#;
-        
+
         let msg = parse_message(json).unwrap();
         assert_eq!(msg.message_type, MSG_TYPE_PING);
     }
@@ -561,10 +525,10 @@ mod tests {
                 "turn": -0.3
             }
         }"#;
-        
+
         let msg = parse_message(json).unwrap();
         assert_eq!(msg.message_type, MSG_TYPE_MOVEMENT);
-        
+
         let payload = extract_movement_command(&msg).unwrap();
         assert_eq!(payload.forward, 0.5);
         assert_eq!(payload.turn, -0.3);
@@ -576,7 +540,6 @@ mod tests {
         let result = parse_message(json);
         assert!(result.is_err());
     }
-
 
     #[test]
     fn test_validate_envelope_valid() {
@@ -595,7 +558,7 @@ mod tests {
             payload: None,
             meta: None,
         };
-        
+
         let result = validate_envelope(&msg);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("type"));
@@ -612,7 +575,7 @@ mod tests {
             payload: None,
             meta: None,
         };
-        
+
         let result = validate_envelope(&msg);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("version"));
@@ -623,12 +586,17 @@ mod tests {
         let ping = create_ping();
         let version = &ping.version;
         let parts: Vec<&str> = version.split('.').collect();
-        
-        assert_eq!(parts.len(), 2, "Version must be MAJOR.MINOR format");
-        assert!(parts[0].parse::<u32>().is_ok(), "MAJOR version must be numeric");
-        assert!(parts[1].parse::<u32>().is_ok(), "MINOR version must be numeric");
-    }
 
+        assert_eq!(parts.len(), 2, "Version must be MAJOR.MINOR format");
+        assert!(
+            parts[0].parse::<u32>().is_ok(),
+            "MAJOR version must be numeric"
+        );
+        assert!(
+            parts[1].parse::<u32>().is_ok(),
+            "MINOR version must be numeric"
+        );
+    }
 
     #[test]
     fn test_is_version_supported() {
@@ -651,7 +619,6 @@ mod tests {
         assert_eq!(negotiated, None);
     }
 
-
     #[test]
     fn test_error_code_serialization() {
         let code = ErrorCode::MovementFailed;
@@ -666,12 +633,11 @@ mod tests {
         assert_eq!(code, ErrorCode::ValidationFailed);
     }
 
-
     #[test]
     fn test_handle_ping_returns_pong() {
         let ping = create_ping();
         let response = handle_message(&ping);
-        
+
         assert!(response.is_some());
         let pong = response.unwrap();
         assert_eq!(pong.message_type, MSG_TYPE_PONG);

@@ -15,11 +15,9 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::{
-    MessageEnvelope,
-    extract_movement_command,
-    MSG_TYPE_MOVEMENT,
-};
+use crate::webrtc_message::MSG_TYPE_MOVEMENT;
+use crate::MessageEnvelope
+use crate::extract_movement_command};
 
 const ROS1: bool = false;
 
@@ -146,11 +144,8 @@ pub async fn start(args: StartArgs) -> Result<()> {
                 if envelope_clone.message_type == MSG_TYPE_MOVEMENT {
                     match extract_movement_command(&envelope_clone) {
                         Ok(cmd) => {
-                            if let Err(e) = bridge_clone
-                                .lock()
-                                .await
-                                .post_movement_command(&cmd)
-                                .await
+                            if let Err(e) =
+                                bridge_clone.lock().await.post_movement_command(&cmd).await
                             {
                                 error!("Failed to post movement command: {}", e);
                             }
