@@ -15,9 +15,7 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::MSG_TYPE_MOVEMENT;
-use crate::MessageEnvelope
-use crate::extract_movement_command};
+use crate::webrtc_message::{MSG_TYPE_MOVEMENT, MessageEnvelope, extract_movement_command};
 
 const ROS1: bool = false;
 

@@ -49,6 +49,7 @@ pub fn generate_timestamp() -> String {
     Utc::now().to_rfc3339()
 }
 
+#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
 pub fn create_ping() -> MessageEnvelope {
     MessageEnvelope {
         message_type: MSG_TYPE_PING.to_string(),
@@ -98,6 +99,7 @@ pub fn validate_movement_command(payload: &MovementCommand) -> Result<(), String
 }
 
 // Create agent.movement message with the given velocities
+#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
 pub fn create_movement(forward: f64, turn: f64) -> Result<MessageEnvelope, String> {
     let payload = MovementCommand { forward, turn };
     validate_movement_command(&payload)?;
@@ -246,6 +248,7 @@ pub fn extract_capabilities_payload(
 }
 
 // Check if a version is supported
+#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
 pub fn is_version_supported(version: &str) -> bool {
     SUPPORTED_VERSIONS.contains(&version)
 }

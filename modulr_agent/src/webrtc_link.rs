@@ -329,14 +329,12 @@ impl WebRtcLink {
                     }
 
                     // Handle protocol-level messages (ping, pong, capabilities, errors)
-                    if let Some(response) = handle_message(&envelope) {
-                        if let Some(dc) = data_channel_clone.lock().await.as_ref() {
-                            if let Ok(response_json) = serde_json::to_string(&response) {
-                                if let Err(e) = dc.send_text(response_json).await {
-                                    error!("Failed to send response: {}", e);
-                                }
-                            }
-                        }
+                    if let Some(response) = handle_message(&envelope)
+                        && let Some(dc) = data_channel_clone.lock().await.as_ref()
+                        && let Ok(response_json) = serde_json::to_string(&response)
+                        && let Err(e) = dc.send_text(response_json).await
+                    {
+                        error!("Failed to send response: {}", e);
                     }
 
                     // Forward to application listeners
