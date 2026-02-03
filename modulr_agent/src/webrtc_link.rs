@@ -1,3 +1,4 @@
+use crate::webrtc_message::{MessageEnvelope, handle_message, parse_message};
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -30,8 +31,6 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-
-use crate::webrtc_message::{MessageEnvelope, handle_message, parse_message, validate_envelope};
 
 type MaybeWebSocketWriter =
     Arc<Mutex<Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>>;
@@ -313,7 +312,6 @@ impl WebRtcLink {
                         }
                     };
 
-                    // Parse into MessageEnvelope
                     let envelope = match parse_message(text) {
                         Ok(env) => env,
                         Err(e) => {
@@ -322,13 +320,6 @@ impl WebRtcLink {
                         }
                     };
 
-                    // Validate envelope structure
-                    if let Err(e) = validate_envelope(&envelope) {
-                        error!("Invalid message envelope: {}", e);
-                        return;
-                    }
-
-                    // Handle protocol-level messages (ping, pong, capabilities, errors)
                     if let Some(response) = handle_message(&envelope)
                         && let Some(dc) = data_channel_clone.lock().await.as_ref()
                         && let Ok(response_json) = serde_json::to_string(&response)
@@ -337,7 +328,6 @@ impl WebRtcLink {
                         error!("Failed to send response: {}", e);
                     }
 
-                    // Forward to application listeners
                     for listener in listeners_clone.lock().await.iter_mut() {
                         tokio::spawn(listener(&envelope));
                     }

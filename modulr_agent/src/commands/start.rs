@@ -15,7 +15,7 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::{MSG_TYPE_MOVEMENT, MessageEnvelope, extract_movement_command};
+use crate::webrtc_message::{AgentMessage, MessageEnvelope, MovementCommand};
 
 const ROS1: bool = false;
 
@@ -139,18 +139,12 @@ pub async fn start(args: StartArgs) -> Result<()> {
             let bridge_clone = Arc::clone(&bridge_clone);
             let envelope_clone = envelope.clone();
             Box::pin(async move {
-                if envelope_clone.message_type == MSG_TYPE_MOVEMENT {
-                    match extract_movement_command(&envelope_clone) {
-                        Ok(cmd) => {
-                            if let Err(e) =
-                                bridge_clone.lock().await.post_movement_command(&cmd).await
-                            {
-                                error!("Failed to post movement command: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Invalid movement payload: {}", e);
-                        }
+                if let Ok(AgentMessage::Movement { forward, turn }) =
+                    AgentMessage::from_message(&envelope_clone)
+                {
+                    let cmd = MovementCommand { forward, turn };
+                    if let Err(e) = bridge_clone.lock().await.post_movement_command(&cmd).await {
+                        error!("Failed to post movement command: {}", e);
                     }
                 }
             })

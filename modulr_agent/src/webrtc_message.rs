@@ -1,29 +1,21 @@
-// Modular agent JSON Shema implementation
+// Modular agent JSON Schema implementation
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-//Constants
 pub const PROTOCOL_VERSION: &str = "0.0";
-pub const MSG_TYPE_PING: &str = "agent.ping";
-pub const MSG_TYPE_PONG: &str = "agent.pong";
-pub const MSG_TYPE_MOVEMENT: &str = "agent.movement";
-pub const MSG_TYPE_ERROR: &str = "agent.error";
-pub const MSG_TYPE_CAPABILITIES: &str = "agent.capabilities";
-
 pub const SUPPORTED_VERSIONS: &[&str] = &["0.0"];
 
-// Common envelope for all protocol messages
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageEnvelope {
-    //Required
     #[serde(rename = "type")]
     pub message_type: String,
     pub version: String,
     pub id: String,
     pub timestamp: String,
 
-    //Optional
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
 
@@ -34,110 +26,269 @@ pub struct MessageEnvelope {
     pub meta: Option<serde_json::Value>,
 }
 
-// Generate a simple unique ID -- what is the standard approach we are supposed to be using here
-pub fn generate_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("msg-{}-{}", duration.as_secs(), duration.subsec_nanos())
+pub trait MessageFields {
+    fn name(&self) -> String;
+    fn correlation_id(&self) -> Option<String>;
+    fn payload(&self) -> Option<serde_json::Value>;
+    fn meta(&self) -> Option<serde_json::Value>;
 }
 
-// Generate RFC 3339 timestamp
-pub fn generate_timestamp() -> String {
-    use chrono::Utc;
-    Utc::now().to_rfc3339()
+pub trait IntoMessage {
+    fn into_message(&self) -> MessageEnvelope;
 }
 
-#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
-pub fn create_ping() -> MessageEnvelope {
-    MessageEnvelope {
-        message_type: MSG_TYPE_PING.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: None,
-        payload: None,
-        meta: None,
+impl<T> IntoMessage for T
+where
+    T: MessageFields,
+{
+    fn into_message(&self) -> MessageEnvelope {
+        MessageEnvelope {
+            message_type: self.name().to_string(),
+            version: PROTOCOL_VERSION.to_string(),
+            id: generate_id(),
+            timestamp: generate_timestamp(),
+            correlation_id: self.correlation_id(),
+            payload: self.payload(),
+            meta: self.meta(),
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum AgentMessage {
+    Ping,
+    Pong {
+        correlation_id: String,
+    },
+    Movement {
+        forward: f64,
+        turn: f64,
+    },
+    Error {
+        correlation_id: Option<String>,
+        code: ErrorCode,
+        message: String,
+        details: Option<serde_json::Value>,
+    },
+    Capabilities {
+        versions: Vec<String>,
+    },
+}
+
+impl MessageFields for AgentMessage {
+    fn name(&self) -> String {
+        match self {
+            AgentMessage::Ping => "agent.ping",
+            AgentMessage::Pong { .. } => "agent.pong",
+            AgentMessage::Movement { .. } => "agent.movement",
+            AgentMessage::Error { .. } => "agent.error",
+            AgentMessage::Capabilities { .. } => "agent.capabilities",
+        }
+        .to_string()
+    }
+
+    fn correlation_id(&self) -> Option<String> {
+        match self {
+            AgentMessage::Pong { correlation_id } => Some(correlation_id.clone()),
+            AgentMessage::Error { correlation_id, .. } => correlation_id.clone(),
+            _ => None,
+        }
+    }
+
+    fn payload(&self) -> Option<serde_json::Value> {
+        match self {
+            AgentMessage::Ping => None,
+            AgentMessage::Pong { .. } => None,
+            AgentMessage::Movement { forward, turn } => Some(serde_json::json!({
+                "forward": forward,
+                "turn": turn
+            })),
+            AgentMessage::Error {
+                code,
+                message,
+                details,
+                ..
+            } => {
+                let mut payload = serde_json::json!({
+                    "code": code,
+                    "message": message
+                });
+                if let Some(d) = details {
+                    payload["details"] = d.clone();
+                }
+                Some(payload)
+            }
+            AgentMessage::Capabilities { versions } => {
+                Some(serde_json::json!({ "versions": versions }))
+            }
+        }
+    }
+
+    fn meta(&self) -> Option<serde_json::Value> {
+        None
     }
 }
 
-pub fn create_pong(ping_id: &str) -> MessageEnvelope {
-    MessageEnvelope {
-        message_type: MSG_TYPE_PONG.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: Some(ping_id.to_string()),
-        payload: None,
-        meta: None,
+impl AgentMessage {
+    pub fn ping() -> Self {
+        AgentMessage::Ping
+    }
+
+    pub fn pong(correlation_id: &str) -> Self {
+        AgentMessage::Pong {
+            correlation_id: correlation_id.to_string(),
+        }
+    }
+
+    pub fn movement(forward: f64, turn: f64) -> Result<Self, String> {
+        if forward < -1.0 || forward > 1.0 {
+            return Err(format!(
+                "forward must be between -1.0 and 1.0, got {}",
+                forward
+            ));
+        }
+        if turn < -1.0 || turn > 1.0 {
+            return Err(format!("turn must be between -1.0 and 1.0, got {}", turn));
+        }
+        Ok(AgentMessage::Movement { forward, turn })
+    }
+
+    pub fn error(
+        code: ErrorCode,
+        message: &str,
+        correlation_id: Option<&str>,
+        details: Option<serde_json::Value>,
+    ) -> Self {
+        AgentMessage::Error {
+            correlation_id: correlation_id.map(String::from),
+            code,
+            message: message.to_string(),
+            details,
+        }
+    }
+
+    pub fn capabilities() -> Self {
+        AgentMessage::Capabilities {
+            versions: SUPPORTED_VERSIONS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[allow(dead_code)] //not needed due to only one version currently
+    pub fn capabilities_with_versions(versions: Vec<String>) -> Self {
+        AgentMessage::Capabilities { versions }
+    }
+
+    pub fn from_message(msg: &MessageEnvelope) -> Result<Self, String> {
+        Self::validate_envelope(msg)?;
+
+        match msg.message_type.as_str() {
+            "agent.ping" => Ok(AgentMessage::Ping),
+
+            "agent.pong" => {
+                let correlation_id = msg
+                    .correlation_id
+                    .clone()
+                    .ok_or("pong requires correlation_id")?;
+                Ok(AgentMessage::Pong { correlation_id })
+            }
+
+            "agent.movement" => {
+                let payload = msg.payload.as_ref().ok_or("movement requires payload")?;
+                let forward = payload["forward"]
+                    .as_f64()
+                    .ok_or("movement requires forward field")?;
+                let turn = payload["turn"]
+                    .as_f64()
+                    .ok_or("movement requires turn field")?;
+
+                if forward < -1.0 || forward > 1.0 {
+                    return Err(format!("forward out of range: {}", forward));
+                }
+                if turn < -1.0 || turn > 1.0 {
+                    return Err(format!("turn out of range: {}", turn));
+                }
+
+                Ok(AgentMessage::Movement { forward, turn })
+            }
+
+            "agent.error" => {
+                let payload = msg.payload.as_ref().ok_or("error requires payload")?;
+                let code: ErrorCode = serde_json::from_value(payload["code"].clone())
+                    .map_err(|e| format!("invalid error code: {}", e))?;
+                let message = payload["message"]
+                    .as_str()
+                    .ok_or("error requires message field")?
+                    .to_string();
+                let details = payload.get("details").cloned();
+
+                Ok(AgentMessage::Error {
+                    correlation_id: msg.correlation_id.clone(),
+                    code,
+                    message,
+                    details,
+                })
+            }
+
+            "agent.capabilities" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or("capabilities requires payload")?;
+                let versions: Vec<String> = payload["versions"]
+                    .as_array()
+                    .ok_or("capabilities requires versions array")?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+
+                Ok(AgentMessage::Capabilities { versions })
+            }
+
+            _ => Err(format!("unknown message type: {}", msg.message_type)),
+        }
+    }
+
+    fn validate_envelope(msg: &MessageEnvelope) -> Result<(), String> {
+        if msg.message_type.is_empty() {
+            return Err("Missing required field: type".to_string());
+        }
+        if msg.version.is_empty() {
+            return Err("Missing required field: version".to_string());
+        }
+        if msg.id.is_empty() {
+            return Err("Missing required field: id".to_string());
+        }
+        if msg.timestamp.is_empty() {
+            return Err("Missing required field: timestamp".to_string());
+        }
+
+        let version_parts: Vec<&str> = msg.version.split('.').collect();
+        if version_parts.len() != 2 {
+            return Err("Invalid version format: expected MAJOR.MINOR".to_string());
+        }
+        for part in version_parts {
+            if part.parse::<u32>().is_err() {
+                return Err("Invalid version format: parts must be numeric".to_string());
+            }
+        }
+
+        Ok(())
     }
 }
 
-// Movement payload
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MovementCommand {
     pub forward: f64,
     pub turn: f64,
 }
 
-// Validate that movement payload values are within valid range
-pub fn validate_movement_command(payload: &MovementCommand) -> Result<(), String> {
-    if payload.forward < -1.0 || payload.forward > 1.0 {
-        return Err(format!(
-            "forward must be between -1.0 and 1.0, got {}",
-            payload.forward
-        ));
-    }
-    if payload.turn < -1.0 || payload.turn > 1.0 {
-        return Err(format!(
-            "turn must be between -1.0 and 1.0, got {}",
-            payload.turn
-        ));
-    }
-    Ok(())
+pub fn generate_id() -> String {
+    Uuid::new_v4().to_string()
 }
 
-// Create agent.movement message with the given velocities
-#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
-pub fn create_movement(forward: f64, turn: f64) -> Result<MessageEnvelope, String> {
-    let payload = MovementCommand { forward, turn };
-    validate_movement_command(&payload)?;
-
-    Ok(MessageEnvelope {
-        message_type: MSG_TYPE_MOVEMENT.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: None,
-        payload: Some(serde_json::to_value(payload).unwrap()),
-        meta: None,
-    })
+pub fn generate_timestamp() -> String {
+    Utc::now().to_rfc3339()
 }
 
-// Extract and validate movement payload from an envelope
-pub fn extract_movement_command(envelope: &MessageEnvelope) -> Result<MovementCommand, String> {
-    if envelope.message_type != MSG_TYPE_MOVEMENT {
-        return Err(format!(
-            "Expected {} message, got {}",
-            MSG_TYPE_MOVEMENT, envelope.message_type
-        ));
-    }
-
-    let payload = envelope
-        .payload
-        .as_ref()
-        .ok_or("Movement message requires payload")?;
-
-    let movement: MovementCommand = serde_json::from_value(payload.clone())
-        .map_err(|e| format!("Invalid movement payload: {}", e))?;
-
-    validate_movement_command(&movement)?;
-
-    Ok(movement)
-}
-
-// Allowed error messeges
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
@@ -152,108 +303,11 @@ pub enum ErrorCode {
     InternalError,
 }
 
-// Error payload
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ErrorPayload {
-    pub code: ErrorCode,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
-//agent.error message
-pub fn create_error(
-    code: ErrorCode,
-    message: &str,
-    correlation_id: Option<&str>,
-    details: Option<serde_json::Value>,
-) -> MessageEnvelope {
-    MessageEnvelope {
-        message_type: MSG_TYPE_ERROR.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: correlation_id.map(String::from),
-        payload: Some(
-            serde_json::to_value(ErrorPayload {
-                code,
-                message: message.to_string(),
-                details,
-            })
-            .unwrap(),
-        ),
-        meta: None,
-    }
-}
-
-// Extract error payload from an envelope
-pub fn extract_error_payload(envelope: &MessageEnvelope) -> Result<ErrorPayload, String> {
-    if envelope.message_type != MSG_TYPE_ERROR {
-        return Err(format!(
-            "Expected {} message, got {}",
-            MSG_TYPE_ERROR, envelope.message_type
-        ));
-    }
-
-    let payload = envelope
-        .payload
-        .as_ref()
-        .ok_or("Error message requires payload")?;
-
-    serde_json::from_value(payload.clone()).map_err(|e| format!("Invalid error payload: {}", e))
-}
-
-// Capabilities payload
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CapabilitiesPayload {
-    pub versions: Vec<String>,
-}
-
-// Creates an agent.capabilities message
-pub fn create_capabilities() -> MessageEnvelope {
-    MessageEnvelope {
-        message_type: MSG_TYPE_CAPABILITIES.to_string(),
-        version: PROTOCOL_VERSION.to_string(),
-        id: generate_id(),
-        timestamp: generate_timestamp(),
-        correlation_id: None,
-        payload: Some(
-            serde_json::to_value(CapabilitiesPayload {
-                versions: SUPPORTED_VERSIONS.iter().map(|s| s.to_string()).collect(),
-            })
-            .unwrap(),
-        ),
-        meta: None,
-    }
-}
-
-// Extract capabilities payload from an envelope
-pub fn extract_capabilities_payload(
-    envelope: &MessageEnvelope,
-) -> Result<CapabilitiesPayload, String> {
-    if envelope.message_type != MSG_TYPE_CAPABILITIES {
-        return Err(format!(
-            "Expected {} message, got {}",
-            MSG_TYPE_CAPABILITIES, envelope.message_type
-        ));
-    }
-
-    let payload = envelope
-        .payload
-        .as_ref()
-        .ok_or("Capabilities message requires payload")?;
-
-    serde_json::from_value(payload.clone())
-        .map_err(|e| format!("Invalid capabilities payload: {}", e))
-}
-
-// Check if a version is supported
-#[allow(dead_code)] //temporary -- need fn for integration but is failing CI test due to dead code
+#[allow(dead_code)]
 pub fn is_version_supported(version: &str) -> bool {
     SUPPORTED_VERSIONS.contains(&version)
 }
 
-// Find the highest compatible version between local and remote capabilities
 pub fn negotiate_version(remote_versions: &[String]) -> Option<String> {
     let mut compatible: Vec<&str> = remote_versions
         .iter()
@@ -265,120 +319,60 @@ pub fn negotiate_version(remote_versions: &[String]) -> Option<String> {
     compatible.last().map(|s| s.to_string())
 }
 
-// Parse incoming JSON into a MessageEnvelope
 pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, String> {
     serde_json::from_str(json_str).map_err(|e| format!("Failed to parse message: {}", e))
 }
 
-// Validate that an envelope has all required fields and checks required fields are not empty
-pub fn validate_envelope(envelope: &MessageEnvelope) -> Result<(), String> {
-    if envelope.message_type.is_empty() {
-        return Err("Missing required field: type".to_string());
-    }
-    if envelope.version.is_empty() {
-        return Err("Missing required field: version".to_string());
-    }
-    if envelope.id.is_empty() {
-        return Err("Missing required field: id".to_string());
-    }
-    if envelope.timestamp.is_empty() {
-        return Err("Missing required field: timestamp".to_string());
-    }
-
-    let version_parts: Vec<&str> = envelope.version.split('.').collect();
-    if version_parts.len() != 2 {
-        return Err("Invalid version format: expected MAJOR.MINOR".to_string());
-    }
-    for part in version_parts {
-        if part.parse::<u32>().is_err() {
-            return Err("Invalid version format: parts must be numeric".to_string());
-        }
-    }
-
-    Ok(())
-}
-
-// Route a message based on its type and return appropriate response
 pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
-    match envelope.message_type.as_str() {
-        MSG_TYPE_PING => Some(create_pong(&envelope.id)),
-        MSG_TYPE_PONG => {
-            println!("Received pong for message: {:?}", envelope.correlation_id);
-            None
-        }
-        MSG_TYPE_MOVEMENT => match extract_movement_command(envelope) {
-            Ok(movement) => {
-                println!(
-                    "Movement command: forward={}, turn={}",
-                    movement.forward, movement.turn
-                );
+    match AgentMessage::from_message(envelope) {
+        Ok(agent_msg) => match agent_msg {
+            AgentMessage::Ping => Some(AgentMessage::pong(&envelope.id).into_message()),
+            AgentMessage::Pong { correlation_id } => {
+                println!("Received pong for message: {}", correlation_id);
                 None
             }
-            Err(e) => Some(create_error(
-                ErrorCode::InvalidPayload,
-                &e,
-                Some(&envelope.id),
-                None,
-            )),
-        },
-        MSG_TYPE_ERROR => {
-            match extract_error_payload(envelope) {
-                Ok(error) => {
-                    println!(
-                        "Received error: code={:?}, message={}",
-                        error.code, error.message
-                    );
-                }
-                Err(e) => {
-                    println!("Failed to parse error message: {}", e);
-                }
+            AgentMessage::Movement { forward, turn } => {
+                println!("Movement command: forward={}, turn={}", forward, turn);
+                None
             }
-            None
-        }
-        MSG_TYPE_CAPABILITIES => {
-            match extract_capabilities_payload(envelope) {
-                Ok(caps) => {
-                    println!("Received capabilities: versions={:?}", caps.versions);
-                    if let Some(version) = negotiate_version(&caps.versions) {
-                        println!("Negotiated version: {}", version);
-                    } else {
-                        return Some(create_error(
+            AgentMessage::Error { code, message, .. } => {
+                println!("Received error: code={:?}, message={}", code, message);
+                None
+            }
+            AgentMessage::Capabilities { versions } => {
+                println!("Received capabilities: versions={:?}", versions);
+                if let Some(version) = negotiate_version(&versions) {
+                    println!("Negotiated version: {}", version);
+                    Some(AgentMessage::capabilities().into_message())
+                } else {
+                    Some(
+                        AgentMessage::error(
                             ErrorCode::CapabilityMismatch,
                             "No compatible protocol version found",
                             Some(&envelope.id),
                             None,
-                        ));
-                    }
-                }
-                Err(e) => {
-                    return Some(create_error(
-                        ErrorCode::InvalidPayload,
-                        &e,
-                        Some(&envelope.id),
-                        None,
-                    ));
+                        )
+                        .into_message(),
+                    )
                 }
             }
-            Some(create_capabilities())
-        }
-        _ => Some(create_error(
-            ErrorCode::UnsupportedMessageType,
-            &format!("Unknown message type: {}", envelope.message_type),
-            Some(&envelope.id),
-            None,
-        )),
+        },
+        Err(e) => Some(
+            AgentMessage::error(ErrorCode::InvalidPayload, &e, Some(&envelope.id), None)
+                .into_message(),
+        ),
     }
 }
 
-//unit tests
+//unit tests -- not ready, need to go through and verify validity of each test
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_create_ping() {
-        let ping = create_ping();
-        assert_eq!(ping.message_type, MSG_TYPE_PING);
+        let ping = AgentMessage::ping().into_message();
+        assert_eq!(ping.message_type, "agent.ping");
         assert_eq!(ping.version, PROTOCOL_VERSION);
         assert!(!ping.id.is_empty());
         assert!(!ping.timestamp.is_empty());
@@ -387,8 +381,8 @@ mod tests {
 
     #[test]
     fn test_create_pong() {
-        let pong = create_pong("original-ping-id");
-        assert_eq!(pong.message_type, MSG_TYPE_PONG);
+        let pong = AgentMessage::pong("original-ping-id").into_message();
+        assert_eq!(pong.message_type, "agent.pong");
         assert_eq!(pong.version, PROTOCOL_VERSION);
         assert_eq!(pong.correlation_id, Some("original-ping-id".to_string()));
         assert!(pong.payload.is_none());
@@ -396,40 +390,47 @@ mod tests {
 
     #[test]
     fn test_create_movement() {
-        let movement = create_movement(0.5, -0.3).unwrap();
-        assert_eq!(movement.message_type, MSG_TYPE_MOVEMENT);
+        let movement = AgentMessage::movement(0.5, -0.3).unwrap().into_message();
+        assert_eq!(movement.message_type, "agent.movement");
         assert!(movement.payload.is_some());
     }
 
     #[test]
     fn test_create_movement_boundary_values() {
-        assert!(create_movement(1.0, 1.0).is_ok());
-        assert!(create_movement(-1.0, -1.0).is_ok());
-        assert!(create_movement(0.0, 0.0).is_ok());
+        assert!(AgentMessage::movement(1.0, 1.0).is_ok());
+        assert!(AgentMessage::movement(-1.0, -1.0).is_ok());
+        assert!(AgentMessage::movement(0.0, 0.0).is_ok());
+    }
+
+    #[test]
+    fn test_create_movement_out_of_range() {
+        assert!(AgentMessage::movement(1.5, 0.0).is_err());
+        assert!(AgentMessage::movement(0.0, -1.5).is_err());
     }
 
     #[test]
     fn test_create_error() {
-        let error = create_error(
+        let error = AgentMessage::error(
             ErrorCode::MovementFailed,
             "Robot hit obstacle",
             Some("msg-123"),
             None,
-        );
-        assert_eq!(error.message_type, MSG_TYPE_ERROR);
+        )
+        .into_message();
+        assert_eq!(error.message_type, "agent.error");
         assert_eq!(error.correlation_id, Some("msg-123".to_string()));
     }
 
     #[test]
     fn test_create_capabilities() {
-        let caps = create_capabilities();
-        assert_eq!(caps.message_type, MSG_TYPE_CAPABILITIES);
+        let caps = AgentMessage::capabilities().into_message();
+        assert_eq!(caps.message_type, "agent.capabilities");
         assert!(caps.payload.is_some());
     }
 
     #[test]
     fn test_ping_roundtrip() {
-        let original = create_ping();
+        let original = AgentMessage::ping().into_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -440,22 +441,39 @@ mod tests {
 
     #[test]
     fn test_movement_roundtrip() {
-        let original = create_movement(0.75, -0.25).unwrap();
+        let original = AgentMessage::movement(0.75, -0.25).unwrap().into_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(original.message_type, parsed.message_type);
         assert_eq!(original.id, parsed.id);
 
-        let orig_payload = extract_movement_command(&original).unwrap();
-        let parsed_payload = extract_movement_command(&parsed).unwrap();
-        assert_eq!(orig_payload.forward, parsed_payload.forward);
-        assert_eq!(orig_payload.turn, parsed_payload.turn);
+        let orig_msg = AgentMessage::from_message(&original).unwrap();
+        let parsed_msg = AgentMessage::from_message(&parsed).unwrap();
+
+        if let (
+            AgentMessage::Movement {
+                forward: f1,
+                turn: t1,
+            },
+            AgentMessage::Movement {
+                forward: f2,
+                turn: t2,
+            },
+        ) = (orig_msg, parsed_msg)
+        {
+            assert_eq!(f1, f2);
+            assert_eq!(t1, t2);
+        } else {
+            panic!("Expected Movement variants");
+        }
     }
 
     #[test]
     fn test_error_roundtrip() {
-        let original = create_error(ErrorCode::ValidationFailed, "Invalid input", None, None);
+        let original =
+            AgentMessage::error(ErrorCode::ValidationFailed, "Invalid input", None, None)
+                .into_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -465,13 +483,13 @@ mod tests {
 
     #[test]
     fn test_json_field_names() {
-        let ping = create_ping();
+        let ping = AgentMessage::ping().into_message();
         let json = serde_json::to_string(&ping).unwrap();
 
         assert!(json.contains("\"type\""));
         assert!(!json.contains("\"message_type\""));
 
-        let pong = create_pong("test");
+        let pong = AgentMessage::pong("test").into_message();
         let pong_json = serde_json::to_string(&pong).unwrap();
         assert!(pong_json.contains("\"correlationId\""));
         assert!(!pong_json.contains("\"correlation_id\""));
@@ -479,29 +497,42 @@ mod tests {
 
     #[test]
     fn test_extract_movement_command() {
-        let msg = create_movement(0.6, -0.2).unwrap();
-        let payload = extract_movement_command(&msg).unwrap();
+        let msg = AgentMessage::movement(0.6, -0.2).unwrap().into_message();
+        let parsed = AgentMessage::from_message(&msg).unwrap();
 
-        assert_eq!(payload.forward, 0.6);
-        assert_eq!(payload.turn, -0.2);
+        if let AgentMessage::Movement { forward, turn } = parsed {
+            assert_eq!(forward, 0.6);
+            assert_eq!(turn, -0.2);
+        } else {
+            panic!("Expected Movement variant");
+        }
     }
 
     #[test]
     fn test_extract_error_payload() {
-        let msg = create_error(ErrorCode::MovementFailed, "Test error", None, None);
-        let payload = extract_error_payload(&msg).unwrap();
+        let msg =
+            AgentMessage::error(ErrorCode::MovementFailed, "Test error", None, None).into_message();
+        let parsed = AgentMessage::from_message(&msg).unwrap();
 
-        assert_eq!(payload.code, ErrorCode::MovementFailed);
-        assert_eq!(payload.message, "Test error");
+        if let AgentMessage::Error { code, message, .. } = parsed {
+            assert_eq!(code, ErrorCode::MovementFailed);
+            assert_eq!(message, "Test error");
+        } else {
+            panic!("Expected Error variant");
+        }
     }
 
     #[test]
     fn test_extract_capabilities_payload() {
-        let msg = create_capabilities();
-        let payload = extract_capabilities_payload(&msg).unwrap();
+        let msg = AgentMessage::capabilities().into_message();
+        let parsed = AgentMessage::from_message(&msg).unwrap();
 
-        assert!(!payload.versions.is_empty());
-        assert!(payload.versions.contains(&"0.0".to_string()));
+        if let AgentMessage::Capabilities { versions } = parsed {
+            assert!(!versions.is_empty());
+            assert!(versions.contains(&"0.0".to_string()));
+        } else {
+            panic!("Expected Capabilities variant");
+        }
     }
     #[test]
     fn test_parse_ping_from_json() {
@@ -513,7 +544,7 @@ mod tests {
         }"#;
 
         let msg = parse_message(json).unwrap();
-        assert_eq!(msg.message_type, MSG_TYPE_PING);
+        assert_eq!(msg.message_type, "agent.ping");
     }
 
     #[test]
@@ -530,11 +561,15 @@ mod tests {
         }"#;
 
         let msg = parse_message(json).unwrap();
-        assert_eq!(msg.message_type, MSG_TYPE_MOVEMENT);
+        assert_eq!(msg.message_type, "agent.movement");
 
-        let payload = extract_movement_command(&msg).unwrap();
-        assert_eq!(payload.forward, 0.5);
-        assert_eq!(payload.turn, -0.3);
+        let parsed = AgentMessage::from_message(&msg).unwrap();
+        if let AgentMessage::Movement { forward, turn } = parsed {
+            assert_eq!(forward, 0.5);
+            assert_eq!(turn, -0.3);
+        } else {
+            panic!("Expected Movement variant");
+        }
     }
 
     #[test]
@@ -546,8 +581,8 @@ mod tests {
 
     #[test]
     fn test_validate_envelope_valid() {
-        let msg = create_ping();
-        assert!(validate_envelope(&msg).is_ok());
+        let msg = AgentMessage::ping().into_message();
+        assert!(AgentMessage::from_message(&msg).is_ok());
     }
 
     #[test]
@@ -562,7 +597,7 @@ mod tests {
             meta: None,
         };
 
-        let result = validate_envelope(&msg);
+        let result = AgentMessage::from_message(&msg);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("type"));
     }
@@ -570,7 +605,7 @@ mod tests {
     #[test]
     fn test_validate_envelope_bad_version() {
         let msg = MessageEnvelope {
-            message_type: MSG_TYPE_PING.to_string(),
+            message_type: "agent.ping".to_string(),
             version: "0.0.2".to_string(),
             id: "123".to_string(),
             timestamp: "2024-01-01T00:00:00Z".to_string(),
@@ -579,14 +614,14 @@ mod tests {
             meta: None,
         };
 
-        let result = validate_envelope(&msg);
+        let result = AgentMessage::from_message(&msg);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("version"));
     }
 
     #[test]
     fn test_version_format_matches_schema() {
-        let ping = create_ping();
+        let ping = AgentMessage::ping().into_message();
         let version = &ping.version;
         let parts: Vec<&str> = version.split('.').collect();
 
@@ -604,6 +639,7 @@ mod tests {
     #[test]
     fn test_is_version_supported() {
         assert!(is_version_supported("0.0"));
+        assert!(!is_version_supported("0.1"));
         assert!(!is_version_supported("0.5"));
         assert!(!is_version_supported("1.0"));
     }
@@ -638,37 +674,71 @@ mod tests {
 
     #[test]
     fn test_handle_ping_returns_pong() {
-        let ping = create_ping();
+        let ping = AgentMessage::ping().into_message();
         let response = handle_message(&ping);
 
         assert!(response.is_some());
         let pong = response.unwrap();
-        assert_eq!(pong.message_type, MSG_TYPE_PONG);
+        assert_eq!(pong.message_type, "agent.pong");
         assert_eq!(pong.correlation_id, Some(ping.id.clone()));
     }
 
     #[test]
     fn test_handle_pong_returns_none() {
-        let pong = create_pong("test-id");
+        let pong = AgentMessage::pong("test-id").into_message();
         let response = handle_message(&pong);
         assert!(response.is_none());
     }
 
     #[test]
     fn test_handle_movement_valid() {
-        let movement = create_movement(0.5, 0.3).unwrap();
+        let movement = AgentMessage::movement(0.5, 0.3).unwrap().into_message();
         let response = handle_message(&movement);
         assert!(response.is_none());
     }
 
     #[test]
     fn test_handle_unknown_message_type() {
-        let mut msg = create_ping();
+        let mut msg = AgentMessage::ping().into_message();
         msg.message_type = "agent.unknown".to_string();
         let response = handle_message(&msg);
 
         assert!(response.is_some());
         let error = response.unwrap();
-        assert_eq!(error.message_type, MSG_TYPE_ERROR);
+        assert_eq!(error.message_type, "agent.error");
+    }
+
+    #[test]
+    fn test_from_message_all_variants() {
+        let ping = AgentMessage::ping().into_message();
+        assert!(matches!(
+            AgentMessage::from_message(&ping),
+            Ok(AgentMessage::Ping)
+        ));
+
+        let pong = AgentMessage::pong("test").into_message();
+        assert!(matches!(
+            AgentMessage::from_message(&pong),
+            Ok(AgentMessage::Pong { .. })
+        ));
+
+        let movement = AgentMessage::movement(0.5, 0.5).unwrap().into_message();
+        assert!(matches!(
+            AgentMessage::from_message(&movement),
+            Ok(AgentMessage::Movement { .. })
+        ));
+
+        let error =
+            AgentMessage::error(ErrorCode::InternalError, "test", None, None).into_message();
+        assert!(matches!(
+            AgentMessage::from_message(&error),
+            Ok(AgentMessage::Error { .. })
+        ));
+
+        let caps = AgentMessage::capabilities().into_message();
+        assert!(matches!(
+            AgentMessage::from_message(&caps),
+            Ok(AgentMessage::Capabilities { .. })
+        ));
     }
 }
