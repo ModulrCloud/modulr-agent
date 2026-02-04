@@ -33,15 +33,15 @@ pub trait MessageFields {
     fn meta(&self) -> Option<serde_json::Value>;
 }
 
-pub trait IntoMessage {
-    fn into_message(&self) -> MessageEnvelope;
+pub trait ToMessage {
+    fn to_message(&self) -> MessageEnvelope;
 }
 
-impl<T> IntoMessage for T
+impl<T> ToMessage for T
 where
     T: MessageFields,
 {
-    fn into_message(&self) -> MessageEnvelope {
+    fn to_message(&self) -> MessageEnvelope {
         MessageEnvelope {
             message_type: self.name().to_string(),
             version: PROTOCOL_VERSION.to_string(),
@@ -129,6 +129,7 @@ impl MessageFields for AgentMessage {
 }
 
 impl AgentMessage {
+    #[allow(dead_code)] //pass test -- will need for actual integration
     pub fn ping() -> Self {
         AgentMessage::Ping
     }
@@ -139,14 +140,15 @@ impl AgentMessage {
         }
     }
 
+    #[allow(dead_code)] //pass test -- will need for actual integration
     pub fn movement(forward: f64, turn: f64) -> Result<Self, String> {
-        if forward < -1.0 || forward > 1.0 {
+        if !(-1.0..=1.0).contains(&forward) {
             return Err(format!(
                 "forward must be between -1.0 and 1.0, got {}",
                 forward
             ));
         }
-        if turn < -1.0 || turn > 1.0 {
+        if !(-1.0..=1.0).contains(&turn) {
             return Err(format!("turn must be between -1.0 and 1.0, got {}", turn));
         }
         Ok(AgentMessage::Movement { forward, turn })
@@ -200,10 +202,10 @@ impl AgentMessage {
                     .as_f64()
                     .ok_or("movement requires turn field")?;
 
-                if forward < -1.0 || forward > 1.0 {
+                if !(-1.0..=1.0).contains(&forward) {
                     return Err(format!("forward out of range: {}", forward));
                 }
-                if turn < -1.0 || turn > 1.0 {
+                if !(-1.0..=1.0).contains(&turn) {
                     return Err(format!("turn out of range: {}", turn));
                 }
 
@@ -326,7 +328,7 @@ pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, String> {
 pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
     match AgentMessage::from_message(envelope) {
         Ok(agent_msg) => match agent_msg {
-            AgentMessage::Ping => Some(AgentMessage::pong(&envelope.id).into_message()),
+            AgentMessage::Ping => Some(AgentMessage::pong(&envelope.id).to_message()),
             AgentMessage::Pong { correlation_id } => {
                 println!("Received pong for message: {}", correlation_id);
                 None
@@ -343,7 +345,7 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
                 println!("Received capabilities: versions={:?}", versions);
                 if let Some(version) = negotiate_version(&versions) {
                     println!("Negotiated version: {}", version);
-                    Some(AgentMessage::capabilities().into_message())
+                    Some(AgentMessage::capabilities().to_message())
                 } else {
                     Some(
                         AgentMessage::error(
@@ -352,14 +354,14 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
                             Some(&envelope.id),
                             None,
                         )
-                        .into_message(),
+                        .to_message(),
                     )
                 }
             }
         },
         Err(e) => Some(
             AgentMessage::error(ErrorCode::InvalidPayload, &e, Some(&envelope.id), None)
-                .into_message(),
+                .to_message(),
         ),
     }
 }
@@ -371,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_create_ping() {
-        let ping = AgentMessage::ping().into_message();
+        let ping = AgentMessage::ping().to_message();
         assert_eq!(ping.message_type, "agent.ping");
         assert_eq!(ping.version, PROTOCOL_VERSION);
         assert!(!ping.id.is_empty());
@@ -381,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_create_pong() {
-        let pong = AgentMessage::pong("original-ping-id").into_message();
+        let pong = AgentMessage::pong("original-ping-id").to_message();
         assert_eq!(pong.message_type, "agent.pong");
         assert_eq!(pong.version, PROTOCOL_VERSION);
         assert_eq!(pong.correlation_id, Some("original-ping-id".to_string()));
@@ -390,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_create_movement() {
-        let movement = AgentMessage::movement(0.5, -0.3).unwrap().into_message();
+        let movement = AgentMessage::movement(0.5, -0.3).unwrap().to_message();
         assert_eq!(movement.message_type, "agent.movement");
         assert!(movement.payload.is_some());
     }
@@ -416,21 +418,21 @@ mod tests {
             Some("msg-123"),
             None,
         )
-        .into_message();
+        .to_message();
         assert_eq!(error.message_type, "agent.error");
         assert_eq!(error.correlation_id, Some("msg-123".to_string()));
     }
 
     #[test]
     fn test_create_capabilities() {
-        let caps = AgentMessage::capabilities().into_message();
+        let caps = AgentMessage::capabilities().to_message();
         assert_eq!(caps.message_type, "agent.capabilities");
         assert!(caps.payload.is_some());
     }
 
     #[test]
     fn test_ping_roundtrip() {
-        let original = AgentMessage::ping().into_message();
+        let original = AgentMessage::ping().to_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -441,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_movement_roundtrip() {
-        let original = AgentMessage::movement(0.75, -0.25).unwrap().into_message();
+        let original = AgentMessage::movement(0.75, -0.25).unwrap().to_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -473,7 +475,7 @@ mod tests {
     fn test_error_roundtrip() {
         let original =
             AgentMessage::error(ErrorCode::ValidationFailed, "Invalid input", None, None)
-                .into_message();
+                .to_message();
         let json = serde_json::to_string(&original).unwrap();
         let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -483,13 +485,13 @@ mod tests {
 
     #[test]
     fn test_json_field_names() {
-        let ping = AgentMessage::ping().into_message();
+        let ping = AgentMessage::ping().to_message();
         let json = serde_json::to_string(&ping).unwrap();
 
         assert!(json.contains("\"type\""));
         assert!(!json.contains("\"message_type\""));
 
-        let pong = AgentMessage::pong("test").into_message();
+        let pong = AgentMessage::pong("test").to_message();
         let pong_json = serde_json::to_string(&pong).unwrap();
         assert!(pong_json.contains("\"correlationId\""));
         assert!(!pong_json.contains("\"correlation_id\""));
@@ -497,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_extract_movement_command() {
-        let msg = AgentMessage::movement(0.6, -0.2).unwrap().into_message();
+        let msg = AgentMessage::movement(0.6, -0.2).unwrap().to_message();
         let parsed = AgentMessage::from_message(&msg).unwrap();
 
         if let AgentMessage::Movement { forward, turn } = parsed {
@@ -511,7 +513,7 @@ mod tests {
     #[test]
     fn test_extract_error_payload() {
         let msg =
-            AgentMessage::error(ErrorCode::MovementFailed, "Test error", None, None).into_message();
+            AgentMessage::error(ErrorCode::MovementFailed, "Test error", None, None).to_message();
         let parsed = AgentMessage::from_message(&msg).unwrap();
 
         if let AgentMessage::Error { code, message, .. } = parsed {
@@ -524,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_extract_capabilities_payload() {
-        let msg = AgentMessage::capabilities().into_message();
+        let msg = AgentMessage::capabilities().to_message();
         let parsed = AgentMessage::from_message(&msg).unwrap();
 
         if let AgentMessage::Capabilities { versions } = parsed {
@@ -581,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_validate_envelope_valid() {
-        let msg = AgentMessage::ping().into_message();
+        let msg = AgentMessage::ping().to_message();
         assert!(AgentMessage::from_message(&msg).is_ok());
     }
 
@@ -621,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_version_format_matches_schema() {
-        let ping = AgentMessage::ping().into_message();
+        let ping = AgentMessage::ping().to_message();
         let version = &ping.version;
         let parts: Vec<&str> = version.split('.').collect();
 
@@ -674,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_handle_ping_returns_pong() {
-        let ping = AgentMessage::ping().into_message();
+        let ping = AgentMessage::ping().to_message();
         let response = handle_message(&ping);
 
         assert!(response.is_some());
@@ -685,21 +687,21 @@ mod tests {
 
     #[test]
     fn test_handle_pong_returns_none() {
-        let pong = AgentMessage::pong("test-id").into_message();
+        let pong = AgentMessage::pong("test-id").to_message();
         let response = handle_message(&pong);
         assert!(response.is_none());
     }
 
     #[test]
     fn test_handle_movement_valid() {
-        let movement = AgentMessage::movement(0.5, 0.3).unwrap().into_message();
+        let movement = AgentMessage::movement(0.5, 0.3).unwrap().to_message();
         let response = handle_message(&movement);
         assert!(response.is_none());
     }
 
     #[test]
     fn test_handle_unknown_message_type() {
-        let mut msg = AgentMessage::ping().into_message();
+        let mut msg = AgentMessage::ping().to_message();
         msg.message_type = "agent.unknown".to_string();
         let response = handle_message(&msg);
 
@@ -710,32 +712,31 @@ mod tests {
 
     #[test]
     fn test_from_message_all_variants() {
-        let ping = AgentMessage::ping().into_message();
+        let ping = AgentMessage::ping().to_message();
         assert!(matches!(
             AgentMessage::from_message(&ping),
             Ok(AgentMessage::Ping)
         ));
 
-        let pong = AgentMessage::pong("test").into_message();
+        let pong = AgentMessage::pong("test").to_message();
         assert!(matches!(
             AgentMessage::from_message(&pong),
             Ok(AgentMessage::Pong { .. })
         ));
 
-        let movement = AgentMessage::movement(0.5, 0.5).unwrap().into_message();
+        let movement = AgentMessage::movement(0.5, 0.5).unwrap().to_message();
         assert!(matches!(
             AgentMessage::from_message(&movement),
             Ok(AgentMessage::Movement { .. })
         ));
 
-        let error =
-            AgentMessage::error(ErrorCode::InternalError, "test", None, None).into_message();
+        let error = AgentMessage::error(ErrorCode::InternalError, "test", None, None).to_message();
         assert!(matches!(
             AgentMessage::from_message(&error),
             Ok(AgentMessage::Error { .. })
         ));
 
-        let caps = AgentMessage::capabilities().into_message();
+        let caps = AgentMessage::capabilities().to_message();
         assert!(matches!(
             AgentMessage::from_message(&caps),
             Ok(AgentMessage::Capabilities { .. })
