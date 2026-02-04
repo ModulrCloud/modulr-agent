@@ -310,10 +310,18 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
                 }
             }
         },
-        Err(e) => Some(
-            AgentMessage::error(ErrorCode::InvalidPayload, &e, Some(&envelope.id), None)
-                .to_message(),
-        ),
+        Err(e) => { 
+            let code = if e.contains("unknown message type") { 
+                ErrorCode::UnsupportedMessageType 
+            } else if e.contains("out of range") { 
+                ErrorCode::ValidationFailed 
+            } else if e.contains("Missing required field") { 
+                ErrorCode::InvalidMessage 
+            } else {
+                ErrorCode::InvalidPayload 
+            };
+            Some(AgentMessage::error(code, &e, Some(&envelope.id), None).to_message()) 
+        }
     }
 }
 
