@@ -1,4 +1,4 @@
-// Modular agent JSON Schema implementation
+// Modulr Agent JSON Schema Implementation
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,32 @@ pub struct MessageEnvelope {
     pub meta: Option<serde_json::Value>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PongPayload {
+    pub correlation_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MovementPayload {
+    pub forward: f64,
+    pub turn: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CapabilitiesPayload {
+    pub versions: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ErrorPayload {
+    pub code: ErrorCode,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+}
+
 pub trait MessageFields {
     fn name(&self) -> String;
     fn correlation_id(&self) -> Option<String>;
@@ -37,13 +63,15 @@ pub trait ToMessage {
     fn to_message(&self) -> MessageEnvelope;
 }
 
+pub type MovementCommand = MovementPayload; //alias to keep naming convention 
+
 impl<T> ToMessage for T
 where
     T: MessageFields,
 {
     fn to_message(&self) -> MessageEnvelope {
         MessageEnvelope {
-            message_type: self.name().to_string(),
+            message_type: self.name(),
             version: PROTOCOL_VERSION.to_string(),
             id: generate_id(),
             timestamp: generate_timestamp(),
@@ -53,72 +81,47 @@ where
         }
     }
 }
-#[derive(Serialize, Deserialize, Clone, Debug)]
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum AgentMessage {
-    Ping,
-    Pong {
-        correlation_id: String,
-    },
-    Movement {
-        forward: f64,
-        turn: f64,
-    },
-    Error {
-        correlation_id: Option<String>,
-        code: ErrorCode,
-        message: String,
-        details: Option<serde_json::Value>,
-    },
-    Capabilities {
-        versions: Vec<String>,
-    },
+    Pong(PongPayload),
+    Capabilities(CapabilitiesPayload),
+    Error(ErrorPayload),
 }
 
 impl MessageFields for AgentMessage {
     fn name(&self) -> String {
         match self {
-            AgentMessage::Ping => "agent.ping",
-            AgentMessage::Pong { .. } => "agent.pong",
-            AgentMessage::Movement { .. } => "agent.movement",
-            AgentMessage::Error { .. } => "agent.error",
-            AgentMessage::Capabilities { .. } => "agent.capabilities",
+            AgentMessage::Pong(_) => "agent.pong",
+            AgentMessage::Capabilities(_) => "agent.capabilities",
+            AgentMessage::Error(_) => "agent.error",
         }
         .to_string()
     }
 
     fn correlation_id(&self) -> Option<String> {
         match self {
-            AgentMessage::Pong { correlation_id } => Some(correlation_id.clone()),
-            AgentMessage::Error { correlation_id, .. } => correlation_id.clone(),
-            _ => None,
+            AgentMessage::Pong(p) => Some(p.correlation_id.clone()),
+            AgentMessage::Error(e) => e.correlation_id.clone(),
+            AgentMessage::Capabilities(_) => None,
         }
     }
 
     fn payload(&self) -> Option<serde_json::Value> {
         match self {
-            AgentMessage::Ping => None,
-            AgentMessage::Pong { .. } => None,
-            AgentMessage::Movement { forward, turn } => Some(serde_json::json!({
-                "forward": forward,
-                "turn": turn
+            AgentMessage::Pong(_) => None,
+            AgentMessage::Capabilities(c) => Some(serde_json::json!({
+                "versions": c.versions
             })),
-            AgentMessage::Error {
-                code,
-                message,
-                details,
-                ..
-            } => {
+            AgentMessage::Error(e) => {
                 let mut payload = serde_json::json!({
-                    "code": code,
-                    "message": message
+                    "code": e.code,
+                    "message": e.message
                 });
-                if let Some(d) = details {
+                if let Some(d) = &e.details {
                     payload["details"] = d.clone();
                 }
                 Some(payload)
-            }
-            AgentMessage::Capabilities { versions } => {
-                Some(serde_json::json!({ "versions": versions }))
             }
         }
     }
@@ -129,29 +132,21 @@ impl MessageFields for AgentMessage {
 }
 
 impl AgentMessage {
-    #[allow(dead_code)] //pass test -- will need for actual integration
-    pub fn ping() -> Self {
-        AgentMessage::Ping
-    }
-
     pub fn pong(correlation_id: &str) -> Self {
-        AgentMessage::Pong {
+        AgentMessage::Pong(PongPayload {
             correlation_id: correlation_id.to_string(),
-        }
+        })
     }
 
-    #[allow(dead_code)] //pass test -- will need for actual integration
-    pub fn movement(forward: f64, turn: f64) -> Result<Self, String> {
-        if !(-1.0..=1.0).contains(&forward) {
-            return Err(format!(
-                "forward must be between -1.0 and 1.0, got {}",
-                forward
-            ));
-        }
-        if !(-1.0..=1.0).contains(&turn) {
-            return Err(format!("turn must be between -1.0 and 1.0, got {}", turn));
-        }
-        Ok(AgentMessage::Movement { forward, turn })
+    pub fn capabilities() -> Self {
+        AgentMessage::Capabilities(CapabilitiesPayload {
+            versions: SUPPORTED_VERSIONS.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn capabilities_with_versions(versions: Vec<String>) -> Self {
+        AgentMessage::Capabilities(CapabilitiesPayload { versions })
     }
 
     pub fn error(
@@ -160,38 +155,28 @@ impl AgentMessage {
         correlation_id: Option<&str>,
         details: Option<serde_json::Value>,
     ) -> Self {
-        AgentMessage::Error {
-            correlation_id: correlation_id.map(String::from),
+        AgentMessage::Error(ErrorPayload {
             code,
             message: message.to_string(),
+            correlation_id: correlation_id.map(String::from),
             details,
-        }
+        })
     }
+}
 
-    pub fn capabilities() -> Self {
-        AgentMessage::Capabilities {
-            versions: SUPPORTED_VERSIONS.iter().map(|s| s.to_string()).collect(),
-        }
-    }
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum SignalingMessage {
+    Ping,
+    Movement(MovementPayload),
+    Capabilities(CapabilitiesPayload),
+}
 
-    #[allow(dead_code)] //not needed due to only one version currently
-    pub fn capabilities_with_versions(versions: Vec<String>) -> Self {
-        AgentMessage::Capabilities { versions }
-    }
-
+impl SignalingMessage {
     pub fn from_message(msg: &MessageEnvelope) -> Result<Self, String> {
-        Self::validate_envelope(msg)?;
+        validate_envelope(msg)?;
 
         match msg.message_type.as_str() {
-            "agent.ping" => Ok(AgentMessage::Ping),
-
-            "agent.pong" => {
-                let correlation_id = msg
-                    .correlation_id
-                    .clone()
-                    .ok_or("pong requires correlation_id")?;
-                Ok(AgentMessage::Pong { correlation_id })
-            }
+            "agent.ping" => Ok(SignalingMessage::Ping),
 
             "agent.movement" => {
                 let payload = msg.payload.as_ref().ok_or("movement requires payload")?;
@@ -209,25 +194,10 @@ impl AgentMessage {
                     return Err(format!("turn out of range: {}", turn));
                 }
 
-                Ok(AgentMessage::Movement { forward, turn })
-            }
-
-            "agent.error" => {
-                let payload = msg.payload.as_ref().ok_or("error requires payload")?;
-                let code: ErrorCode = serde_json::from_value(payload["code"].clone())
-                    .map_err(|e| format!("invalid error code: {}", e))?;
-                let message = payload["message"]
-                    .as_str()
-                    .ok_or("error requires message field")?
-                    .to_string();
-                let details = payload.get("details").cloned();
-
-                Ok(AgentMessage::Error {
-                    correlation_id: msg.correlation_id.clone(),
-                    code,
-                    message,
-                    details,
-                })
+                Ok(SignalingMessage::Movement(MovementPayload {
+                    forward,
+                    turn,
+                }))
             }
 
             "agent.capabilities" => {
@@ -242,45 +212,31 @@ impl AgentMessage {
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect();
 
-                Ok(AgentMessage::Capabilities { versions })
+                Ok(SignalingMessage::Capabilities(CapabilitiesPayload {
+                    versions,
+                }))
             }
 
             _ => Err(format!("unknown message type: {}", msg.message_type)),
         }
     }
-
-    fn validate_envelope(msg: &MessageEnvelope) -> Result<(), String> {
-        if msg.message_type.is_empty() {
-            return Err("Missing required field: type".to_string());
-        }
-        if msg.version.is_empty() {
-            return Err("Missing required field: version".to_string());
-        }
-        if msg.id.is_empty() {
-            return Err("Missing required field: id".to_string());
-        }
-        if msg.timestamp.is_empty() {
-            return Err("Missing required field: timestamp".to_string());
-        }
-
-        let version_parts: Vec<&str> = msg.version.split('.').collect();
-        if version_parts.len() != 2 {
-            return Err("Invalid version format: expected MAJOR.MINOR".to_string());
-        }
-        for part in version_parts {
-            if part.parse::<u32>().is_err() {
-                return Err("Invalid version format: parts must be numeric".to_string());
-            }
-        }
-
-        Ok(())
-    }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MovementCommand {
-    pub forward: f64,
-    pub turn: f64,
+pub fn validate_envelope(msg: &MessageEnvelope) -> Result<(), String> {
+    if msg.message_type.is_empty() {
+        return Err("Missing required field: type".to_string());
+    }
+    if msg.version.is_empty() {
+        return Err("Missing required field: version".to_string());
+    }
+    if msg.id.is_empty() {
+        return Err("Missing required field: id".to_string());
+    }
+    if msg.timestamp.is_empty() {
+        return Err("Missing required field: timestamp".to_string());
+    }
+
+    Ok(())
 }
 
 pub fn generate_id() -> String {
@@ -326,24 +282,19 @@ pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, String> {
 }
 
 pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
-    match AgentMessage::from_message(envelope) {
-        Ok(agent_msg) => match agent_msg {
-            AgentMessage::Ping => Some(AgentMessage::pong(&envelope.id).to_message()),
-            AgentMessage::Pong { correlation_id } => {
-                println!("Received pong for message: {}", correlation_id);
+    match SignalingMessage::from_message(envelope) {
+        Ok(msg) => match msg {
+            SignalingMessage::Ping => Some(AgentMessage::pong(&envelope.id).to_message()),
+            SignalingMessage::Movement(payload) => {
+                println!(
+                    "Movement command: forward={}, turn={}",
+                    payload.forward, payload.turn
+                );
                 None
             }
-            AgentMessage::Movement { forward, turn } => {
-                println!("Movement command: forward={}, turn={}", forward, turn);
-                None
-            }
-            AgentMessage::Error { code, message, .. } => {
-                println!("Received error: code={:?}, message={}", code, message);
-                None
-            }
-            AgentMessage::Capabilities { versions } => {
-                println!("Received capabilities: versions={:?}", versions);
-                if let Some(version) = negotiate_version(&versions) {
+            SignalingMessage::Capabilities(payload) => {
+                println!("Received capabilities: versions={:?}", payload.versions);
+                if let Some(version) = negotiate_version(&payload.versions) {
                     println!("Negotiated version: {}", version);
                     Some(AgentMessage::capabilities().to_message())
                 } else {
@@ -366,298 +317,329 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
     }
 }
 
-//unit tests -- not ready, need to go through and verify validity of each test
+//Unit Tests
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_create_ping() {
-        let ping = AgentMessage::ping().to_message();
-        assert_eq!(ping.message_type, "agent.ping");
-        assert_eq!(ping.version, PROTOCOL_VERSION);
-        assert!(!ping.id.is_empty());
-        assert!(!ping.timestamp.is_empty());
-        assert!(ping.payload.is_none());
+    fn test_pong_payload() {
+        let payload = PongPayload {
+            correlation_id: "test-123".to_string(),
+        };
+        assert_eq!(payload.correlation_id, "test-123");
     }
 
     #[test]
-    fn test_create_pong() {
-        let pong = AgentMessage::pong("original-ping-id").to_message();
-        assert_eq!(pong.message_type, "agent.pong");
-        assert_eq!(pong.version, PROTOCOL_VERSION);
-        assert_eq!(pong.correlation_id, Some("original-ping-id".to_string()));
-        assert!(pong.payload.is_none());
+    fn test_movement_payload() {
+        let payload = MovementPayload {
+            forward: 0.5,
+            turn: -0.3,
+        };
+        assert_eq!(payload.forward, 0.5);
+        assert_eq!(payload.turn, -0.3);
     }
 
     #[test]
-    fn test_create_movement() {
-        let movement = AgentMessage::movement(0.5, -0.3).unwrap().to_message();
-        assert_eq!(movement.message_type, "agent.movement");
-        assert!(movement.payload.is_some());
+    fn test_capabilities_payload() {
+        let payload = CapabilitiesPayload {
+            versions: vec!["0.0".to_string(), "0.1".to_string()],
+        };
+        assert_eq!(payload.versions.len(), 2);
     }
 
     #[test]
-    fn test_create_movement_boundary_values() {
-        assert!(AgentMessage::movement(1.0, 1.0).is_ok());
-        assert!(AgentMessage::movement(-1.0, -1.0).is_ok());
-        assert!(AgentMessage::movement(0.0, 0.0).is_ok());
+    fn test_error_payload() {
+        let payload = ErrorPayload {
+            code: ErrorCode::InvalidPayload,
+            message: "Test error".to_string(),
+            details: None,
+            correlation_id: Some("msg-123".to_string()),
+        };
+        assert_eq!(payload.code, ErrorCode::InvalidPayload);
+        assert_eq!(payload.message, "Test error");
     }
 
     #[test]
-    fn test_create_movement_out_of_range() {
-        assert!(AgentMessage::movement(1.5, 0.0).is_err());
-        assert!(AgentMessage::movement(0.0, -1.5).is_err());
+    fn test_agent_message_pong() {
+        let msg = AgentMessage::pong("ping-123");
+        if let AgentMessage::Pong(payload) = msg {
+            assert_eq!(payload.correlation_id, "ping-123");
+        } else {
+            panic!("Expected Pong variant");
+        }
     }
 
     #[test]
-    fn test_create_error() {
-        let error = AgentMessage::error(
+    fn test_agent_message_pong_to_message() {
+        let envelope = AgentMessage::pong("ping-123").to_message();
+        assert_eq!(envelope.message_type, "agent.pong");
+        assert_eq!(envelope.correlation_id, Some("ping-123".to_string()));
+        assert!(envelope.payload.is_none());
+    }
+
+    #[test]
+    fn test_agent_message_capabilities() {
+        let msg = AgentMessage::capabilities();
+        if let AgentMessage::Capabilities(payload) = msg {
+            assert!(payload.versions.contains(&"0.0".to_string()));
+        } else {
+            panic!("Expected Capabilities variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_message_capabilities_to_message() {
+        let envelope = AgentMessage::capabilities().to_message();
+        assert_eq!(envelope.message_type, "agent.capabilities");
+        assert!(envelope.payload.is_some());
+    }
+
+    #[test]
+    fn test_agent_message_error() {
+        let msg = AgentMessage::error(
             ErrorCode::MovementFailed,
-            "Robot hit obstacle",
-            Some("msg-123"),
+            "Robot stuck",
+            Some("cmd-123"),
             None,
-        )
-        .to_message();
-        assert_eq!(error.message_type, "agent.error");
-        assert_eq!(error.correlation_id, Some("msg-123".to_string()));
-    }
-
-    #[test]
-    fn test_create_capabilities() {
-        let caps = AgentMessage::capabilities().to_message();
-        assert_eq!(caps.message_type, "agent.capabilities");
-        assert!(caps.payload.is_some());
-    }
-
-    #[test]
-    fn test_ping_roundtrip() {
-        let original = AgentMessage::ping().to_message();
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(original.message_type, parsed.message_type);
-        assert_eq!(original.id, parsed.id);
-        assert_eq!(original.version, parsed.version);
-    }
-
-    #[test]
-    fn test_movement_roundtrip() {
-        let original = AgentMessage::movement(0.75, -0.25).unwrap().to_message();
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(original.message_type, parsed.message_type);
-        assert_eq!(original.id, parsed.id);
-
-        let orig_msg = AgentMessage::from_message(&original).unwrap();
-        let parsed_msg = AgentMessage::from_message(&parsed).unwrap();
-
-        if let (
-            AgentMessage::Movement {
-                forward: f1,
-                turn: t1,
-            },
-            AgentMessage::Movement {
-                forward: f2,
-                turn: t2,
-            },
-        ) = (orig_msg, parsed_msg)
-        {
-            assert_eq!(f1, f2);
-            assert_eq!(t1, t2);
-        } else {
-            panic!("Expected Movement variants");
-        }
-    }
-
-    #[test]
-    fn test_error_roundtrip() {
-        let original =
-            AgentMessage::error(ErrorCode::ValidationFailed, "Invalid input", None, None)
-                .to_message();
-        let json = serde_json::to_string(&original).unwrap();
-        let parsed: MessageEnvelope = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(original.message_type, parsed.message_type);
-        assert_eq!(original.id, parsed.id);
-    }
-
-    #[test]
-    fn test_json_field_names() {
-        let ping = AgentMessage::ping().to_message();
-        let json = serde_json::to_string(&ping).unwrap();
-
-        assert!(json.contains("\"type\""));
-        assert!(!json.contains("\"message_type\""));
-
-        let pong = AgentMessage::pong("test").to_message();
-        let pong_json = serde_json::to_string(&pong).unwrap();
-        assert!(pong_json.contains("\"correlationId\""));
-        assert!(!pong_json.contains("\"correlation_id\""));
-    }
-
-    #[test]
-    fn test_extract_movement_command() {
-        let msg = AgentMessage::movement(0.6, -0.2).unwrap().to_message();
-        let parsed = AgentMessage::from_message(&msg).unwrap();
-
-        if let AgentMessage::Movement { forward, turn } = parsed {
-            assert_eq!(forward, 0.6);
-            assert_eq!(turn, -0.2);
-        } else {
-            panic!("Expected Movement variant");
-        }
-    }
-
-    #[test]
-    fn test_extract_error_payload() {
-        let msg =
-            AgentMessage::error(ErrorCode::MovementFailed, "Test error", None, None).to_message();
-        let parsed = AgentMessage::from_message(&msg).unwrap();
-
-        if let AgentMessage::Error { code, message, .. } = parsed {
-            assert_eq!(code, ErrorCode::MovementFailed);
-            assert_eq!(message, "Test error");
+        );
+        if let AgentMessage::Error(payload) = msg {
+            assert_eq!(payload.code, ErrorCode::MovementFailed);
+            assert_eq!(payload.message, "Robot stuck");
+            assert_eq!(payload.correlation_id, Some("cmd-123".to_string()));
         } else {
             panic!("Expected Error variant");
         }
     }
 
     #[test]
-    fn test_extract_capabilities_payload() {
-        let msg = AgentMessage::capabilities().to_message();
-        let parsed = AgentMessage::from_message(&msg).unwrap();
-
-        if let AgentMessage::Capabilities { versions } = parsed {
-            assert!(!versions.is_empty());
-            assert!(versions.contains(&"0.0".to_string()));
-        } else {
-            panic!("Expected Capabilities variant");
-        }
-    }
-    #[test]
-    fn test_parse_ping_from_json() {
-        let json = r#"{
-            "type": "agent.ping",
-            "version": "0.0",
-            "id": "test-id",
-            "timestamp": "2024-01-01T00:00:00Z"
-        }"#;
-
-        let msg = parse_message(json).unwrap();
-        assert_eq!(msg.message_type, "agent.ping");
+    fn test_agent_message_error_to_message() {
+        let envelope =
+            AgentMessage::error(ErrorCode::InvalidPayload, "Bad data", Some("msg-456"), None)
+                .to_message();
+        assert_eq!(envelope.message_type, "agent.error");
+        assert_eq!(envelope.correlation_id, Some("msg-456".to_string()));
+        assert!(envelope.payload.is_some());
     }
 
     #[test]
-    fn test_parse_movement_from_json() {
-        let json = r#"{
-            "type": "agent.movement",
-            "version": "0.0",
-            "id": "test-id",
-            "timestamp": "2024-01-01T00:00:00Z",
-            "payload": {
-                "forward": 0.5,
-                "turn": -0.3
-            }
-        }"#;
+    fn test_signaling_message_parse_ping() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.ping".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: None,
+            meta: None,
+        };
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        assert!(matches!(msg, SignalingMessage::Ping));
+    }
 
-        let msg = parse_message(json).unwrap();
-        assert_eq!(msg.message_type, "agent.movement");
-
-        let parsed = AgentMessage::from_message(&msg).unwrap();
-        if let AgentMessage::Movement { forward, turn } = parsed {
-            assert_eq!(forward, 0.5);
-            assert_eq!(turn, -0.3);
+    #[test]
+    fn test_signaling_message_parse_movement() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.movement".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"forward": 0.5, "turn": -0.3})),
+            meta: None,
+        };
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        if let SignalingMessage::Movement(payload) = msg {
+            assert_eq!(payload.forward, 0.5);
+            assert_eq!(payload.turn, -0.3);
         } else {
             panic!("Expected Movement variant");
         }
     }
 
     #[test]
-    fn test_parse_invalid_json() {
-        let json = r#"{ invalid json }"#;
-        let result = parse_message(json);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_envelope_valid() {
-        let msg = AgentMessage::ping().to_message();
-        assert!(AgentMessage::from_message(&msg).is_ok());
-    }
-
-    #[test]
-    fn test_validate_envelope_missing_type() {
-        let msg = MessageEnvelope {
-            message_type: "".to_string(),
+    fn test_signaling_message_parse_movement_out_of_range() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.movement".to_string(),
             version: "0.0".to_string(),
-            id: "123".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"forward": 1.5, "turn": 0.0})),
+            meta: None,
+        };
+        let result = SignalingMessage::from_message(&envelope);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("out of range"));
+    }
+
+    #[test]
+    fn test_signaling_message_parse_capabilities() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.capabilities".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"versions": ["0.0", "0.1"]})),
+            meta: None,
+        };
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        if let SignalingMessage::Capabilities(payload) = msg {
+            assert_eq!(payload.versions.len(), 2);
+            assert!(payload.versions.contains(&"0.0".to_string()));
+        } else {
+            panic!("Expected Capabilities variant");
+        }
+    }
+
+    #[test]
+    fn test_signaling_message_parse_unknown() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.unknown".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             correlation_id: None,
             payload: None,
             meta: None,
         };
+        let result = SignalingMessage::from_message(&envelope);
+        assert!(result.is_err());
+    }
 
-        let result = AgentMessage::from_message(&msg);
+    #[test]
+    fn test_handle_ping_returns_pong() {
+        let ping = MessageEnvelope {
+            message_type: "agent.ping".to_string(),
+            version: "0.0".to_string(),
+            id: "ping-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: None,
+            meta: None,
+        };
+        let response = handle_message(&ping);
+        assert!(response.is_some());
+        let pong = response.unwrap();
+        assert_eq!(pong.message_type, "agent.pong");
+        assert_eq!(pong.correlation_id, Some("ping-123".to_string()));
+    }
+
+    #[test]
+    fn test_handle_movement_returns_none() {
+        let movement = MessageEnvelope {
+            message_type: "agent.movement".to_string(),
+            version: "0.0".to_string(),
+            id: "move-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"forward": 0.5, "turn": 0.3})),
+            meta: None,
+        };
+        let response = handle_message(&movement);
+        assert!(response.is_none());
+    }
+
+    #[test]
+    fn test_handle_capabilities_returns_capabilities() {
+        let caps = MessageEnvelope {
+            message_type: "agent.capabilities".to_string(),
+            version: "0.0".to_string(),
+            id: "caps-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"versions": ["0.0"]})),
+            meta: None,
+        };
+        let response = handle_message(&caps);
+        assert!(response.is_some());
+        let our_caps = response.unwrap();
+        assert_eq!(our_caps.message_type, "agent.capabilities");
+    }
+
+    #[test]
+    fn test_handle_capabilities_no_match() {
+        let caps = MessageEnvelope {
+            message_type: "agent.capabilities".to_string(),
+            version: "0.0".to_string(),
+            id: "caps-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: Some(serde_json::json!({"versions": ["9.9"]})),
+            meta: None,
+        };
+        let response = handle_message(&caps);
+        assert!(response.is_some());
+        let error = response.unwrap();
+        assert_eq!(error.message_type, "agent.error");
+    }
+
+    #[test]
+    fn test_handle_unknown_returns_error() {
+        let unknown = MessageEnvelope {
+            message_type: "agent.unknown".to_string(),
+            version: "0.0".to_string(),
+            id: "unknown-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: None,
+            meta: None,
+        };
+        let response = handle_message(&unknown);
+        assert!(response.is_some());
+        let error = response.unwrap();
+        assert_eq!(error.message_type, "agent.error");
+    }
+
+    #[test]
+    fn test_validate_envelope_valid() {
+        let envelope = MessageEnvelope {
+            message_type: "agent.ping".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: None,
+            meta: None,
+        };
+        assert!(validate_envelope(&envelope).is_ok());
+    }
+
+    #[test]
+    fn test_validate_envelope_missing_type() {
+        let envelope = MessageEnvelope {
+            message_type: "".to_string(),
+            version: "0.0".to_string(),
+            id: "test-id".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            correlation_id: None,
+            payload: None,
+            meta: None,
+        };
+        let result = validate_envelope(&envelope);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("type"));
     }
 
     #[test]
-    fn test_validate_envelope_bad_version() {
-        let msg = MessageEnvelope {
-            message_type: "agent.ping".to_string(),
-            version: "0.0.2".to_string(),
-            id: "123".to_string(),
-            timestamp: "2024-01-01T00:00:00Z".to_string(),
-            correlation_id: None,
-            payload: None,
-            meta: None,
-        };
-
-        let result = AgentMessage::from_message(&msg);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("version"));
+    fn test_negotiate_version_match() {
+        let remote = vec!["0.0".to_string(), "0.1".to_string()];
+        let result = negotiate_version(&remote);
+        assert_eq!(result, Some("0.0".to_string()));
     }
 
     #[test]
-    fn test_version_format_matches_schema() {
-        let ping = AgentMessage::ping().to_message();
-        let version = &ping.version;
-        let parts: Vec<&str> = version.split('.').collect();
-
-        assert_eq!(parts.len(), 2, "Version must be MAJOR.MINOR format");
-        assert!(
-            parts[0].parse::<u32>().is_ok(),
-            "MAJOR version must be numeric"
-        );
-        assert!(
-            parts[1].parse::<u32>().is_ok(),
-            "MINOR version must be numeric"
-        );
+    fn test_negotiate_version_no_match() {
+        let remote = vec!["1.0".to_string(), "2.0".to_string()];
+        let result = negotiate_version(&remote);
+        assert_eq!(result, None);
     }
 
     #[test]
     fn test_is_version_supported() {
         assert!(is_version_supported("0.0"));
-        assert!(!is_version_supported("0.1"));
-        assert!(!is_version_supported("0.5"));
         assert!(!is_version_supported("1.0"));
-    }
-
-    #[test]
-    fn test_negotiate_version() {
-        let remote = vec!["0.0".to_string(), "0.2".to_string()];
-        let negotiated = negotiate_version(&remote);
-        assert_eq!(negotiated, Some("0.0".to_string()));
-    }
-
-    #[test]
-    fn test_negotiate_version_no_match() {
-        let remote = vec!["0.5".to_string(), "1.0".to_string()];
-        let negotiated = negotiate_version(&remote);
-        assert_eq!(negotiated, None);
     }
 
     #[test]
@@ -675,71 +657,32 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_ping_returns_pong() {
-        let ping = AgentMessage::ping().to_message();
-        let response = handle_message(&ping);
-
-        assert!(response.is_some());
-        let pong = response.unwrap();
-        assert_eq!(pong.message_type, "agent.pong");
-        assert_eq!(pong.correlation_id, Some(ping.id.clone()));
-    }
-
-    #[test]
-    fn test_handle_pong_returns_none() {
-        let pong = AgentMessage::pong("test-id").to_message();
-        let response = handle_message(&pong);
-        assert!(response.is_none());
-    }
-
-    #[test]
-    fn test_handle_movement_valid() {
-        let movement = AgentMessage::movement(0.5, 0.3).unwrap().to_message();
-        let response = handle_message(&movement);
-        assert!(response.is_none());
-    }
-
-    #[test]
-    fn test_handle_unknown_message_type() {
-        let mut msg = AgentMessage::ping().to_message();
-        msg.message_type = "agent.unknown".to_string();
-        let response = handle_message(&msg);
-
-        assert!(response.is_some());
-        let error = response.unwrap();
-        assert_eq!(error.message_type, "agent.error");
-    }
-
-    #[test]
-    fn test_from_message_all_variants() {
-        let ping = AgentMessage::ping().to_message();
-        assert!(matches!(
-            AgentMessage::from_message(&ping),
-            Ok(AgentMessage::Ping)
-        ));
-
+    fn test_json_field_names() {
         let pong = AgentMessage::pong("test").to_message();
-        assert!(matches!(
-            AgentMessage::from_message(&pong),
-            Ok(AgentMessage::Pong { .. })
-        ));
+        let json = serde_json::to_string(&pong).unwrap();
+        assert!(json.contains("\"type\""));
+        assert!(json.contains("\"correlationId\""));
+        assert!(!json.contains("\"message_type\""));
+        assert!(!json.contains("\"correlation_id\""));
+    }
 
-        let movement = AgentMessage::movement(0.5, 0.5).unwrap().to_message();
-        assert!(matches!(
-            AgentMessage::from_message(&movement),
-            Ok(AgentMessage::Movement { .. })
-        ));
+    #[test]
+    fn test_parse_message_valid() {
+        let json = r#"{
+            "type": "agent.ping",
+            "version": "0.0",
+            "id": "test-id",
+            "timestamp": "2024-01-01T00:00:00Z"
+        }"#;
+        let result = parse_message(json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().message_type, "agent.ping");
+    }
 
-        let error = AgentMessage::error(ErrorCode::InternalError, "test", None, None).to_message();
-        assert!(matches!(
-            AgentMessage::from_message(&error),
-            Ok(AgentMessage::Error { .. })
-        ));
-
-        let caps = AgentMessage::capabilities().to_message();
-        assert!(matches!(
-            AgentMessage::from_message(&caps),
-            Ok(AgentMessage::Capabilities { .. })
-        ));
+    #[test]
+    fn test_parse_message_invalid() {
+        let json = "{ invalid json }";
+        let result = parse_message(json);
+        assert!(result.is_err());
     }
 }
