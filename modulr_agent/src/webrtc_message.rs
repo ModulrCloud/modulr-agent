@@ -1,6 +1,7 @@
 // Modulr Agent JSON Schema Implementation
 
 use chrono::Utc;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -286,16 +287,16 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
         Ok(msg) => match msg {
             SignalingMessage::Ping => Some(AgentMessage::pong(&envelope.id).to_message()),
             SignalingMessage::Movement(payload) => {
-                println!(
+                debug!(
                     "Movement command: forward={}, turn={}",
                     payload.forward, payload.turn
                 );
                 None
             }
             SignalingMessage::Capabilities(payload) => {
-                println!("Received capabilities: versions={:?}", payload.versions);
+                info!("Received capabilities: versions={:?}", payload.versions);
                 if let Some(version) = negotiate_version(&payload.versions) {
-                    println!("Negotiated version: {}", version);
+                    info!("Negotiated version: {}", version);
                     Some(AgentMessage::capabilities().to_message())
                 } else {
                     Some(
@@ -310,17 +311,17 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
                 }
             }
         },
-        Err(e) => { 
-            let code = if e.contains("unknown message type") { 
-                ErrorCode::UnsupportedMessageType 
-            } else if e.contains("out of range") { 
-                ErrorCode::ValidationFailed 
-            } else if e.contains("Missing required field") { 
-                ErrorCode::InvalidMessage 
+        Err(e) => {
+            let code = if e.contains("unknown message type") {
+                ErrorCode::UnsupportedMessageType
+            } else if e.contains("out of range") {
+                ErrorCode::ValidationFailed
+            } else if e.contains("Missing required field") {
+                ErrorCode::InvalidMessage
             } else {
-                ErrorCode::InvalidPayload 
+                ErrorCode::InvalidPayload
             };
-            Some(AgentMessage::error(code, &e, Some(&envelope.id), None).to_message()) 
+            Some(AgentMessage::error(code, &e, Some(&envelope.id), None).to_message())
         }
     }
 }
