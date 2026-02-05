@@ -1,4 +1,4 @@
-use crate::webrtc_message::{MessageEnvelope, handle_message, parse_message};
+use crate::webrtc_message::{MessageEnvelope, handle_message};
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -303,16 +303,7 @@ impl WebRtcLink {
                 let listeners_clone = Arc::clone(&listeners_clone);
                 let data_channel_clone = Arc::clone(&data_channel_for_messages);
                 Box::pin(async move {
-                    // Convert bytes to string
-                    let text = match std::str::from_utf8(&msg.data) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            error!("Invalid UTF-8 in data channel message: {}", e);
-                            return;
-                        }
-                    };
-
-                    let envelope = match parse_message(text) {
+                    let envelope: MessageEnvelope = match serde_json::from_slice(&msg.data) {
                         Ok(env) => env,
                         Err(e) => {
                             error!("Failed to parse message: {}", e);

@@ -3,6 +3,7 @@
 use chrono::Utc;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: &str = "0.0";
@@ -163,6 +164,75 @@ impl AgentMessage {
             details,
         })
     }
+
+    #[allow(dead_code)]
+    pub fn from_message(msg: &MessageEnvelope) -> Result<Self, MessageParseError> {
+        validate_envelope(msg)?;
+
+        match msg.message_type.as_str() {
+            "agent.pong" => {
+                let correlation_id =
+                    msg.correlation_id
+                        .clone()
+                        .ok_or(MessageParseError::MissingField {
+                            field: "correlationId".to_string(),
+                        })?;
+                Ok(AgentMessage::Pong(PongPayload { correlation_id }))
+            }
+
+            "agent.capabilities" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageParseError::MissingField {
+                        field: "payload".to_string(),
+                    })?;
+                let versions: Vec<String> = payload["versions"]
+                    .as_array()
+                    .ok_or(MessageParseError::MissingField {
+                        field: "versions".to_string(),
+                    })?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                Ok(AgentMessage::Capabilities(CapabilitiesPayload { versions }))
+            }
+
+            "agent.error" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageParseError::MissingField {
+                        field: "payload".to_string(),
+                    })?;
+                let code: ErrorCode =
+                    serde_json::from_value(payload["code"].clone()).map_err(|_| {
+                        MessageParseError::MissingField {
+                            field: "code".to_string(),
+                        }
+                    })?;
+                let message = payload["message"]
+                    .as_str()
+                    .ok_or(MessageParseError::MissingField {
+                        field: "message".to_string(),
+                    })?
+                    .to_string();
+                let details = payload.get("details").cloned();
+                let correlation_id = msg.correlation_id.clone();
+
+                Ok(AgentMessage::Error(ErrorPayload {
+                    code,
+                    message,
+                    details,
+                    correlation_id,
+                }))
+            }
+
+            _ => Err(MessageParseError::UnknownMessageType {
+                message_type: msg.message_type.clone(),
+            }),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -173,26 +243,44 @@ pub enum SignalingMessage {
 }
 
 impl SignalingMessage {
-    pub fn from_message(msg: &MessageEnvelope) -> Result<Self, String> {
+    pub fn from_message(msg: &MessageEnvelope) -> Result<Self, MessageParseError> {
         validate_envelope(msg)?;
 
         match msg.message_type.as_str() {
             "agent.ping" => Ok(SignalingMessage::Ping),
 
             "agent.movement" => {
-                let payload = msg.payload.as_ref().ok_or("movement requires payload")?;
-                let forward = payload["forward"]
-                    .as_f64()
-                    .ok_or("movement requires forward field")?;
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageParseError::MissingField {
+                        field: "payload".to_string(),
+                    })?;
+                let forward =
+                    payload["forward"]
+                        .as_f64()
+                        .ok_or(MessageParseError::MissingField {
+                            field: "forward".to_string(),
+                        })?;
                 let turn = payload["turn"]
                     .as_f64()
-                    .ok_or("movement requires turn field")?;
+                    .ok_or(MessageParseError::MissingField {
+                        field: "turn".to_string(),
+                    })?;
 
                 if !(-1.0..=1.0).contains(&forward) {
-                    return Err(format!("forward out of range: {}", forward));
+                    return Err(MessageParseError::OutOfRange {
+                        field: "forward".to_string(),
+                        value: forward.to_string(),
+                        expected: "-1.0 to 1.0".to_string(),
+                    });
                 }
                 if !(-1.0..=1.0).contains(&turn) {
-                    return Err(format!("turn out of range: {}", turn));
+                    return Err(MessageParseError::OutOfRange {
+                        field: "turn".to_string(),
+                        value: turn.to_string(),
+                        expected: "-1.0 to 1.0".to_string(),
+                    });
                 }
 
                 Ok(SignalingMessage::Movement(MovementPayload {
@@ -205,10 +293,14 @@ impl SignalingMessage {
                 let payload = msg
                     .payload
                     .as_ref()
-                    .ok_or("capabilities requires payload")?;
+                    .ok_or(MessageParseError::MissingField {
+                        field: "payload".to_string(),
+                    })?;
                 let versions: Vec<String> = payload["versions"]
                     .as_array()
-                    .ok_or("capabilities requires versions array")?
+                    .ok_or(MessageParseError::MissingField {
+                        field: "versions".to_string(),
+                    })?
                     .iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect();
@@ -218,23 +310,33 @@ impl SignalingMessage {
                 }))
             }
 
-            _ => Err(format!("unknown message type: {}", msg.message_type)),
+            _ => Err(MessageParseError::UnknownMessageType {
+                message_type: msg.message_type.clone(),
+            }),
         }
     }
 }
 
-pub fn validate_envelope(msg: &MessageEnvelope) -> Result<(), String> {
+pub fn validate_envelope(msg: &MessageEnvelope) -> Result<(), MessageParseError> {
     if msg.message_type.is_empty() {
-        return Err("Missing required field: type".to_string());
+        return Err(MessageParseError::EnvelopeValidation {
+            reason: "missing required field: type".to_string(),
+        });
     }
     if msg.version.is_empty() {
-        return Err("Missing required field: version".to_string());
+        return Err(MessageParseError::EnvelopeValidation {
+            reason: "missing required field: version".to_string(),
+        });
     }
     if msg.id.is_empty() {
-        return Err("Missing required field: id".to_string());
+        return Err(MessageParseError::EnvelopeValidation {
+            reason: "missing required field: id".to_string(),
+        });
     }
     if msg.timestamp.is_empty() {
-        return Err("Missing required field: timestamp".to_string());
+        return Err(MessageParseError::EnvelopeValidation {
+            reason: "missing required field: timestamp".to_string(),
+        });
     }
 
     Ok(())
@@ -262,6 +364,29 @@ pub enum ErrorCode {
     InternalError,
 }
 
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum MessageParseError {
+    #[allow(dead_code)]
+    #[error("JSON parse error: {reason}")]
+    JsonParse { reason: String },
+
+    #[error("missing required field: {field}")]
+    MissingField { field: String },
+
+    #[error("value out of range: {field} = {value} (expected {expected})")]
+    OutOfRange {
+        field: String,
+        value: String,
+        expected: String,
+    },
+
+    #[error("unknown message type: {message_type}")]
+    UnknownMessageType { message_type: String },
+
+    #[error("envelope validation failed: {reason}")]
+    EnvelopeValidation { reason: String },
+}
+
 #[allow(dead_code)]
 pub fn is_version_supported(version: &str) -> bool {
     SUPPORTED_VERSIONS.contains(&version)
@@ -278,8 +403,11 @@ pub fn negotiate_version(remote_versions: &[String]) -> Option<String> {
     compatible.last().map(|s| s.to_string())
 }
 
-pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, String> {
-    serde_json::from_str(json_str).map_err(|e| format!("Failed to parse message: {}", e))
+#[allow(dead_code)]
+pub fn parse_message(json_str: &str) -> Result<MessageEnvelope, MessageParseError> {
+    serde_json::from_str(json_str).map_err(|e| MessageParseError::JsonParse {
+        reason: e.to_string(),
+    })
 }
 
 pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
@@ -311,17 +439,17 @@ pub fn handle_message(envelope: &MessageEnvelope) -> Option<MessageEnvelope> {
                 }
             }
         },
+
         Err(e) => {
-            let code = if e.contains("unknown message type") {
-                ErrorCode::UnsupportedMessageType
-            } else if e.contains("out of range") {
-                ErrorCode::ValidationFailed
-            } else if e.contains("Missing required field") {
-                ErrorCode::InvalidMessage
-            } else {
-                ErrorCode::InvalidPayload
+            let code = match &e {
+                MessageParseError::UnknownMessageType { .. } => ErrorCode::UnsupportedMessageType,
+                MessageParseError::OutOfRange { .. } => ErrorCode::ValidationFailed,
+                MessageParseError::EnvelopeValidation { .. } => ErrorCode::InvalidMessage,
+                MessageParseError::MissingField { .. } | MessageParseError::JsonParse { .. } => {
+                    ErrorCode::InvalidPayload
+                }
             };
-            Some(AgentMessage::error(code, &e, Some(&envelope.id), None).to_message())
+            Some(AgentMessage::error(code, &e.to_string(), Some(&envelope.id), None).to_message())
         }
     }
 }
@@ -479,7 +607,10 @@ mod tests {
         };
         let result = SignalingMessage::from_message(&envelope);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("out of range"));
+        assert!(matches!(
+            result.unwrap_err(),
+            MessageParseError::OutOfRange { .. }
+        ));
     }
 
     #[test]
@@ -628,7 +759,10 @@ mod tests {
         };
         let result = validate_envelope(&envelope);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("type"));
+        assert!(matches!(
+            result.unwrap_err(),
+            MessageParseError::EnvelopeValidation { .. }
+        ));
     }
 
     #[test]
