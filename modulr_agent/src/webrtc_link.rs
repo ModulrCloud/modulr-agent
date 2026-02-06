@@ -1,3 +1,4 @@
+use crate::webrtc_message::{MessageEnvelope, handle_message};
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -31,15 +32,15 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::webrtc_message::WebRtcMessage;
-
 type MaybeWebSocketWriter =
     Arc<Mutex<Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>>;
 type MaybeWebSocketReader =
     Arc<Mutex<Option<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>>;
 
 pub type OnWebRtcMessageHdlrFn = Box<
-    dyn (FnMut(&WebRtcMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
+    dyn (FnMut(&MessageEnvelope) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
+        + Send
+        + Sync,
 >;
 
 fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
@@ -296,16 +297,30 @@ impl WebRtcLink {
             info!("DataChannel opened: {}", dc.label());
 
             let listeners_clone = Arc::clone(&listeners_clone);
+            let data_channel_for_messages = Arc::clone(&data_channel_clone); // Clone for on_message
             dc.on_message(Box::new(move |msg: DataChannelMessage| {
                 debug!("Received data channel message: {:?}", msg);
                 let listeners_clone = Arc::clone(&listeners_clone);
+                let data_channel_clone = Arc::clone(&data_channel_for_messages);
                 Box::pin(async move {
-                    if let Ok(msg) = serde_json::from_slice(&msg.data) {
-                        for listener in listeners_clone.lock().await.iter_mut() {
-                            tokio::spawn(listener(&msg));
+                    let envelope: MessageEnvelope = match serde_json::from_slice(&msg.data) {
+                        Ok(env) => env,
+                        Err(e) => {
+                            error!("Failed to parse message: {}", e);
+                            return;
                         }
-                    } else {
-                        error!("Failed to decode message from WebRTC");
+                    };
+
+                    if let Some(response) = handle_message(&envelope)
+                        && let Some(dc) = data_channel_clone.lock().await.as_ref()
+                        && let Ok(response_json) = serde_json::to_string(&response)
+                        && let Err(e) = dc.send_text(response_json).await
+                    {
+                        error!("Failed to send response: {}", e);
+                    }
+
+                    for listener in listeners_clone.lock().await.iter_mut() {
+                        tokio::spawn(listener(&envelope));
                     }
                 })
             }));

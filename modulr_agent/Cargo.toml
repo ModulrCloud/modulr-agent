@@ -28,6 +28,8 @@ rustls = { version = "0.21", features = ["dangerous_configuration"] }
 modulr_agent_common = { path = "../modulr_agent_common" }
 modulr_ros_messages = { path = "../modulr_ros_messages" }
 modulr_zenoh_interface = { path = "../modulr_zenoh_interface", optional = true }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }   
 
 [dev-dependencies]
 tempfile = "3.23.0"
