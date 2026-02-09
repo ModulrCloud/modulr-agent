@@ -1,4 +1,4 @@
-import asyncio, websockets, json, ssl
+import asyncio, websockets, json, uuid, ssl
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 8765
@@ -20,8 +20,13 @@ async def test_client():
             print("Connected to server!")
 
             register_msg = {
-                "type": "register",
-                "from": "robot1"
+                "type": "signalling.register",
+                "version": "0.0",
+                "id": str(uuid.uuid4()),
+                "timestamp": "",
+                "payload": {
+                    "agentId": "robot1"
+                }
             }
             await websocket.send(json.dumps(register_msg))
             print("Sent registration: robot1")
