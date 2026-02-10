@@ -4,7 +4,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use rustls::client::{ServerCertVerified, ServerCertVerifier};
-use rustls::{ClientConfig, RootCertStore};
+use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
@@ -169,23 +169,26 @@ impl WebRtcLink {
             self.local_id, self.signaling_url
         );
 
-        let mut config = ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(RootCertStore::empty())
-            .with_no_client_auth();
-
-        if self.allow_skip_cert_check {
-            warn!("allow_skip_cert_check=true, using insecure TLS verifier");
+        // When not skipping cert check, pass None so tokio-tungstenite uses its default
+        // TLS connector (Mozilla root store via rustls-tls-webpki-roots). When skipping
+        // (dev/local only), use a custom connector that accepts any server cert.
+        let connector = if self.allow_skip_cert_check {
+            warn!("allow_skip_cert_check=true, using insecure TLS verifier (dev/local only)");
+            let mut config = ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth();
             config
                 .dangerous()
                 .set_certificate_verifier(insecure_verifier());
-        }
-
-        let connector = Connector::Rustls(Arc::new(config));
+            Some(Connector::Rustls(Arc::new(config)))
+        } else {
+            None
+        };
 
         info!("Connecting WebSocket to {}", self.signaling_url);
         let (ws_stream, _) =
-            connect_async_tls_with_config(&self.signaling_url, None, false, Some(connector))
+            connect_async_tls_with_config(&self.signaling_url, None, false, connector)
                 .await
                 .map_err(WebRtcLinkError::ConnectionAttemptFailed)?;
 
