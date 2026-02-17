@@ -113,14 +113,14 @@ async fn configure_ros_camera_callback(
 pub async fn start(args: StartArgs) -> Result<()> {
     let config = read_config(args.config_override)?;
 
-    let robot_id = config.robot_id;
-    let signaling_url = config.signaling_url;
+    let robot_id = config.core.robot_id;
+    let signaling_url = config.core.signaling_url;
     let webrtc_link = Arc::new(Mutex::new(WebRtcLink::new(
         &robot_id,
         &signaling_url,
         args.allow_skip_cert_check,
     )));
-    let pipeline = Arc::new(Mutex::new(VideoPipeline::new(config.image_format)));
+    let pipeline = Arc::new(Mutex::new(VideoPipeline::new(config.robot.image_format)));
 
     let bridge: Arc<Mutex<dyn RosBridge>> = if ROS1 {
         Arc::new(Mutex::new(Ros1Bridge::new()))
@@ -178,17 +178,17 @@ pub async fn start(args: StartArgs) -> Result<()> {
 
     // Robot camera frame -> Pipeline
     // Determine which image format to use for the video source
-    let ros_image_format = match config.video_source {
-        VideoSource::Ros => Some(config.image_format),
+    let ros_image_format = match config.robot.video_source {
+        VideoSource::Ros => Some(config.robot.image_format),
         VideoSource::Zenoh => None, // Zenoh handles its own subscription
     };
 
-    match config.video_source {
+    match config.robot.video_source {
         VideoSource::Zenoh => {
             configure_zenoh_camera_callback(
                 Arc::clone(&pipeline),
                 Arc::clone(&webrtc_link),
-                config.image_format,
+                config.robot.image_format,
             )
             .await?
         }
