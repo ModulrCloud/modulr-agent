@@ -47,6 +47,11 @@ pub fn write_config(config: &AgentConfig, override_path: Option<PathBuf>) -> Res
     let config_path = override_path.or(get_default_path()).ok_or(anyhow::anyhow!(
         "No configuration file provided and default file path cannot be built!"
     ))?;
+    if let Some(parent) = config_path.parent()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(
         &config_path,
         serde_json::to_string_pretty(config)
@@ -102,5 +107,25 @@ mod tests {
         write_config(&config, Some(temp_file.path().to_path_buf())).unwrap();
         let deserialized = read_config(Some(temp_file.path().to_path_buf())).unwrap();
         assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn test_write_config_creates_directory_if_not_exists() {
+        let config = AgentConfig {
+            robot_id: "test_robot".to_string(),
+            signaling_url: "ws://localhost:8080".to_string(),
+            video_source: VideoSource::Zenoh,
+            image_format: ImageFormat::Raw,
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("fake_dir").join("config.json");
+
+        // Parent directory should not exist yet
+        assert!(!config_path.parent().unwrap().exists());
+
+        write_config(&config, Some(config_path.clone())).unwrap();
+
+        // Directory should now exist
+        assert!(config_path.parent().unwrap().exists());
     }
 }
