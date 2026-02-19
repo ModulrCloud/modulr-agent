@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 
-use crate::commands::config::{AgentConfig, ImageFormat, VideoSource, write_config};
+use crate::commands::config::{
+    AgentConfig, CoreConfig, ImageFormat, RobotConfig, VideoSource, write_config,
+};
 
 #[derive(Parser, Debug)]
 pub struct InitialSetupArgs {
@@ -12,9 +14,9 @@ pub struct InitialSetupArgs {
     /// Signaling URL for establishing WebRTC link
     #[arg(short, long)]
     signaling_url: String,
-    /// Determine source of video frames
+    /// Determine source of video frames (defaults to Ros)
     #[arg(long)]
-    video_source: VideoSource,
+    video_source: Option<VideoSource>,
     /// Format of incoming image frames (raw BGR or JPEG)
     #[arg(long, default_value = "raw")]
     image_format: ImageFormat,
@@ -25,10 +27,14 @@ pub struct InitialSetupArgs {
 
 pub async fn initial_setup(args: InitialSetupArgs) -> Result<()> {
     let config = AgentConfig {
-        robot_id: args.robot_id,
-        signaling_url: args.signaling_url,
-        video_source: args.video_source,
-        image_format: args.image_format,
+        core: CoreConfig {
+            robot_id: args.robot_id,
+            signaling_url: args.signaling_url,
+        },
+        robot: RobotConfig {
+            video_source: args.video_source.unwrap_or_default(),
+            image_format: args.image_format,
+        },
     };
     write_config(&config, args.config_override)
 }
