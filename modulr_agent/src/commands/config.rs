@@ -6,19 +6,32 @@ use serde::{Deserialize, Serialize};
 
 pub use modulr_agent_common::ImageFormat;
 
-#[derive(Parser, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
+#[derive(Parser, Default, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
 pub enum VideoSource {
+    #[default]
     Ros,
     Zenoh,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct AgentConfig {
+pub struct CoreConfig {
     pub robot_id: String,
     pub signaling_url: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RobotConfig {
+    #[serde(default)]
     pub video_source: VideoSource,
     #[serde(default)]
     pub image_format: ImageFormat,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentConfig {
+    pub core: CoreConfig,
+    #[serde(default)]
+    pub robot: RobotConfig,
 }
 
 pub fn get_default_path() -> Option<PathBuf> {
@@ -80,10 +93,14 @@ mod tests {
     #[test]
     fn test_read_config_roundtrip() {
         let config = AgentConfig {
-            robot_id: "my_robot_id".to_string(),
-            signaling_url: "my_signaling_url".to_string(),
-            video_source: VideoSource::Ros,
-            image_format: ImageFormat::Raw,
+            core: CoreConfig {
+                robot_id: "my_robot_id".to_string(),
+                signaling_url: "my_signaling_url".to_string(),
+            },
+            robot: RobotConfig {
+                video_source: VideoSource::Ros,
+                image_format: ImageFormat::Raw,
+            },
         };
         let serialized = serde_json::to_string_pretty(&config).unwrap();
         println!("Serialized config: {}", serialized);
@@ -98,10 +115,14 @@ mod tests {
     #[test]
     fn test_write_config_roundtrip() {
         let config = AgentConfig {
-            robot_id: "my_robot_id".to_string(),
-            signaling_url: "my_signaling_url".to_string(),
-            video_source: VideoSource::Ros,
-            image_format: ImageFormat::Jpeg,
+            core: CoreConfig {
+                robot_id: "my_robot_id".to_string(),
+                signaling_url: "my_signaling_url".to_string(),
+            },
+            robot: RobotConfig {
+                video_source: VideoSource::Ros,
+                image_format: ImageFormat::Jpeg,
+            },
         };
         let temp_file = NamedTempFile::new().unwrap();
         write_config(&config, Some(temp_file.path().to_path_buf())).unwrap();
@@ -112,10 +133,14 @@ mod tests {
     #[test]
     fn test_write_config_creates_directory_if_not_exists() {
         let config = AgentConfig {
-            robot_id: "test_robot".to_string(),
-            signaling_url: "ws://localhost:8080".to_string(),
-            video_source: VideoSource::Zenoh,
-            image_format: ImageFormat::Raw,
+            core: CoreConfig {
+                robot_id: "my_robot_id".to_string(),
+                signaling_url: "my_signaling_url".to_string(),
+            },
+            robot: RobotConfig {
+                video_source: VideoSource::Ros,
+                image_format: ImageFormat::Jpeg,
+            },
         };
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("fake_dir").join("config.json");
@@ -127,5 +152,51 @@ mod tests {
 
         // Directory should now exist
         assert!(config_path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn test_read_config_with_missing_robot_uses_defaults() {
+        // Config file with only core config, missing robot section
+        let partial_json = r#"{
+            "core": {
+                "robot_id": "test_robot",
+                "signaling_url": "ws://localhost:8080"
+            }
+        }"#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), partial_json).unwrap();
+
+        let result = read_config(Some(temp_file.path().to_path_buf()));
+        assert!(
+            result.is_ok(),
+            "read_config should use defaults for missing robot config, but failed: {:?}",
+            result.err()
+        );
+
+        let config = result.unwrap();
+        assert_eq!(config.core.robot_id, "test_robot");
+        assert_eq!(config.core.signaling_url, "ws://localhost:8080");
+        assert_eq!(config.robot, RobotConfig::default());
+    }
+
+    #[test]
+    fn test_read_config_missing_core_fails() {
+        // Config file missing required core section should fail
+        let partial_json = r#"{
+            "robot": {
+                "video_source": "Ros",
+                "image_format": "Raw"
+            }
+        }"#;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), partial_json).unwrap();
+
+        let result = read_config(Some(temp_file.path().to_path_buf()));
+        assert!(
+            result.is_err(),
+            "read_config should fail when core config is missing"
+        );
     }
 }
