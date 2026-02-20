@@ -25,6 +25,8 @@ base64 = "0.22.1"
 clap = { version = "4.5.52", features = ["derive"] }
 dirs = "6.0.0"
 rustls = { version = "0.21", features = ["dangerous_configuration"] }
+webpki-roots = "0.25"
+rustls-native-certs = "0.6"
 modulr_agent_common = { path = "../modulr_agent_common" }
 modulr_ros_messages = { path = "../modulr_ros_messages" }
 modulr_zenoh_interface = { path = "../modulr_zenoh_interface", optional = true }
