@@ -17,6 +17,10 @@ pub enum ErrorCode {
     AgentUnavailable,
     CapabilityMismatch,
     InternalError,
+    LocationNotFound,
+    LocationAlreadyExists,
+    LocationStorageFull,
+    LocationNameInvalid,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -31,6 +35,47 @@ pub struct MovementPayload {
     pub turn: f64,
 }
 pub type MovementCommand = MovementPayload;
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Position {
+    pub x: f64,
+    pub y: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Orientation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Location {
+    pub name: String,
+    pub position: Position,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LocationDeletePayload {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationResponsePayload {
+    pub operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locations: Option<Vec<Location>>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CapabilitiesPayload {
@@ -51,6 +96,11 @@ pub struct ErrorPayload {
 pub enum AgentMessage {
     Capabilities(CapabilitiesPayload),
     Error(ErrorPayload),
+    LocationCreate(Location),
+    LocationDelete(LocationDeletePayload),
+    LocationList,
+    LocationResponse(LocationResponsePayload),
+    LocationUpdate(Location),
     Movement(MovementPayload),
     Ping(PingPayload),
     Pong(PongPayload),
@@ -61,6 +111,11 @@ impl MessageFields for AgentMessage {
         match self {
             AgentMessage::Capabilities(_) => "agent.capabilities",
             AgentMessage::Error(_) => "agent.error",
+            AgentMessage::LocationCreate(_) => "agent.location.create",
+            AgentMessage::LocationDelete(_) => "agent.location.delete",
+            AgentMessage::LocationList => "agent.location.list",
+            AgentMessage::LocationResponse(_) => "agent.location.response",
+            AgentMessage::LocationUpdate(_) => "agent.location.update",
             AgentMessage::Movement(_) => "agent.movement",
             AgentMessage::Ping(_) => "agent.ping",
             AgentMessage::Pong(_) => "agent.pong",
@@ -71,9 +126,14 @@ impl MessageFields for AgentMessage {
     fn correlation_id(&self) -> Option<String> {
         match self {
             AgentMessage::Error(e) => e.correlation_id.clone(),
-            AgentMessage::Capabilities(_) => None,
-            AgentMessage::Movement(_) => None,
             AgentMessage::Ping(p) | AgentMessage::Pong(p) => Some(p.correlation_id.clone()),
+            AgentMessage::Capabilities(_) => None,
+            AgentMessage::LocationCreate(_) => None,
+            AgentMessage::LocationDelete(_) => None,
+            AgentMessage::LocationList => None,
+            AgentMessage::LocationResponse(_) => None,
+            AgentMessage::LocationUpdate(_) => None,
+            AgentMessage::Movement(_) => None,
         }
     }
 
@@ -81,9 +141,14 @@ impl MessageFields for AgentMessage {
         match self {
             AgentMessage::Capabilities(c) => serde_json::to_value(c).ok(),
             AgentMessage::Error(e) => serde_json::to_value(e).ok(),
+            AgentMessage::LocationCreate(l) => serde_json::to_value(l).ok(),
+            AgentMessage::LocationDelete(l) => serde_json::to_value(l).ok(),
+            AgentMessage::LocationList => None,
+            AgentMessage::LocationResponse(r) => serde_json::to_value(r).ok(),
+            AgentMessage::LocationUpdate(l) => serde_json::to_value(l).ok(),
+            AgentMessage::Movement(cmd) => serde_json::to_value(cmd).ok(),
             AgentMessage::Ping(_) => None,
             AgentMessage::Pong(_) => None,
-            AgentMessage::Movement(cmd) => serde_json::to_value(cmd).ok(),
         }
     }
 
@@ -278,6 +343,39 @@ impl AgentMessage {
                             fields: vec!["correlationId".to_string()],
                         })?;
                 Ok(AgentMessage::Pong(PongPayload { correlation_id }))
+            }
+
+            "agent.location.create" | "agent.location.update" => {
+                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
+                    fields: vec!["payload".to_string()],
+                })?;
+                let location: Location = serde_json::from_value(payload.clone())
+                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                if msg.message_type == "agent.location.create" {
+                    Ok(AgentMessage::LocationCreate(location))
+                } else {
+                    Ok(AgentMessage::LocationUpdate(location))
+                }
+            }
+
+            "agent.location.list" => Ok(AgentMessage::LocationList),
+
+            "agent.location.delete" => {
+                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
+                    fields: vec!["payload".to_string()],
+                })?;
+                let del: LocationDeletePayload = serde_json::from_value(payload.clone())
+                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                Ok(AgentMessage::LocationDelete(del))
+            }
+
+            "agent.location.response" => {
+                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
+                    fields: vec!["payload".to_string()],
+                })?;
+                let resp: LocationResponsePayload = serde_json::from_value(payload.clone())
+                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                Ok(AgentMessage::LocationResponse(resp))
             }
 
             _ => Err(MessageEnvelopeError::UnknownMessageType {
@@ -687,6 +785,113 @@ mod tests {
         match parsed {
             AgentMessage::Pong(p) => assert_eq!(p.correlation_id, "rt-pong"),
             other => panic!("Expected Pong, got {:?}", other),
+        }
+    }
+
+    // --- Location parsing tests ---
+
+    #[test]
+    fn test_parse_location_create() {
+        let envelope = make_envelope(
+            "agent.location.create",
+            None,
+            Some(json!({
+                "name": "Warehouse Loading Dock",
+                "position": { "x": 12.5, "y": 8.3 },
+                "orientation": { "yaw": 1.57 }
+            })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::LocationCreate(l) => {
+                assert_eq!(l.name, "Warehouse Loading Dock");
+                assert_eq!(l.position.x, 12.5);
+                assert_eq!(l.position.y, 8.3);
+                assert!(l.position.z.is_none());
+                assert_eq!(l.orientation.unwrap().yaw, Some(1.57));
+            }
+            other => panic!("Expected LocationCreate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_location_create_missing_payload_returns_error() {
+        let envelope = make_envelope("agent.location.create", None, None);
+        let err = AgentMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::MissingFields { .. }));
+    }
+
+    #[test]
+    fn test_parse_location_list() {
+        let envelope = make_envelope("agent.location.list", None, None);
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        assert!(matches!(msg, AgentMessage::LocationList));
+    }
+
+    #[test]
+    fn test_parse_location_update() {
+        let envelope = make_envelope(
+            "agent.location.update",
+            None,
+            Some(json!({
+                "name": "Warehouse Loading Dock",
+                "position": { "x": 12.8, "y": 8.5 }
+            })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::LocationUpdate(l) => {
+                assert_eq!(l.name, "Warehouse Loading Dock");
+                assert_eq!(l.position.x, 12.8);
+            }
+            other => panic!("Expected LocationUpdate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_location_delete() {
+        let envelope = make_envelope(
+            "agent.location.delete",
+            None,
+            Some(json!({ "name": "Old Warehouse Location" })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::LocationDelete(d) => {
+                assert_eq!(d.name, "Old Warehouse Location");
+            }
+            other => panic!("Expected LocationDelete, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_location_delete_missing_payload_returns_error() {
+        let envelope = make_envelope("agent.location.delete", None, None);
+        let err = AgentMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::MissingFields { .. }));
+    }
+
+    #[test]
+    fn test_parse_location_response() {
+        let envelope = make_envelope(
+            "agent.location.response",
+            Some("req-123"),
+            Some(json!({
+                "operation": "list",
+                "locations": [
+                    { "name": "Home", "position": { "x": 0.0, "y": 0.0 } }
+                ]
+            })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::LocationResponse(r) => {
+                assert_eq!(r.operation, "list");
+                let locs = r.locations.unwrap();
+                assert_eq!(locs.len(), 1);
+                assert_eq!(locs[0].name, "Home");
+            }
+            other => panic!("Expected LocationResponse, got {:?}", other),
         }
     }
 }
