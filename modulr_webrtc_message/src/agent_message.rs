@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::common::{
-    CapabilitiesErrorCode, MessageEnvelope, MessageEnvelopeError, MessageFields,
+    CapabilitiesErrorCode, Location, MessageEnvelope, MessageEnvelopeError, MessageFields,
 };
 use crate::{SUPPORTED_VERSIONS, validate_capabilities};
 
@@ -35,34 +35,6 @@ pub struct MovementPayload {
     pub turn: f64,
 }
 pub type MovementCommand = MovementPayload;
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub z: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Orientation {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub yaw: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pitch: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub roll: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Location {
-    pub name: String,
-    pub position: Position,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orientation: Option<Orientation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LocationDeletePayload {
@@ -350,6 +322,8 @@ impl AgentMessage {
                     fields: vec!["payload".to_string()],
                 })?;
                 let location: Location = serde_json::from_value(payload.clone())
+                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                location.validate()
                     .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
                 if msg.message_type == "agent.location.create" {
                     Ok(AgentMessage::LocationCreate(location))
