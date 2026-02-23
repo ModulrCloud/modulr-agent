@@ -30,7 +30,7 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-use crate::webrtc_message::{
+use modulr_webrtc_message::{
     AgentMessage, AnswerPayload, ConnectedPayload, DisconnectedPayload, DisconnectionReason,
     IceCandidatePayload, IceConnectionState, MessageEnvelope, PingPayload, RegisterPayload,
     SignalingMessage, ToMessage,

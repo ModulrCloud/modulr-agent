@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::webrtc_message::common::{MessageEnvelope, MessageEnvelopeError, MessageFields};
+use crate::common::{MessageEnvelope, MessageEnvelopeError, MessageFields};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -326,7 +326,7 @@ impl SignalingMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webrtc_message::ToMessage;
+    use crate::ToMessage;
     use serde_json::json;
     use std::str::FromStr;
 

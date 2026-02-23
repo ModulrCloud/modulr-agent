@@ -28,6 +28,7 @@ rustls = { version = "0.21", features = ["dangerous_configuration"] }
 webpki-roots = "0.25"
 rustls-native-certs = "0.6"
 modulr_agent_common = { path = "../modulr_agent_common" }
+modulr_webrtc_message = { path = "../modulr_webrtc_message" }
 modulr_ros_messages = { path = "../modulr_ros_messages" }
 modulr_zenoh_interface = { path = "../modulr_zenoh_interface", optional = true }
 chrono = "0.4"

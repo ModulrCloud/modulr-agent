@@ -1,5 +1,5 @@
 mod agent_message;
-mod common;
+pub mod common;
 mod signalling_message;
 
 pub use agent_message::{AgentMessage, MovementCommand, PingPayload};

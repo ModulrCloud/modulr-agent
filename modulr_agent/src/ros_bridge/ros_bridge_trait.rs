@@ -1,8 +1,8 @@
 use crate::{
     commands::config::ImageFormat,
     ros_bridge::{OnCameraImageHdlrFn, RosBridgeError},
-    webrtc_message::MovementCommand,
 };
+use modulr_webrtc_message::MovementCommand;
 
 use async_trait::async_trait;
 

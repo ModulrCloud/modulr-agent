@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::webrtc_message::common::{
+use crate::common::{
     CapabilitiesErrorCode, MessageEnvelope, MessageEnvelopeError, MessageFields,
 };
-use crate::webrtc_message::{SUPPORTED_VERSIONS, validate_capabilities};
+use crate::{SUPPORTED_VERSIONS, validate_capabilities};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -290,7 +290,7 @@ impl AgentMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webrtc_message::ToMessage;
+    use crate::ToMessage;
     use serde_json::json;
     use std::str::FromStr;
 

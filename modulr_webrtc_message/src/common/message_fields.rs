@@ -1,7 +1,7 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::webrtc_message::{MessageEnvelope, PROTOCOL_VERSION};
+use crate::{MessageEnvelope, PROTOCOL_VERSION};
 
 pub fn generate_id() -> String {
     Uuid::new_v4().to_string()

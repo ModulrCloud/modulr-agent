@@ -15,7 +15,7 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::AgentMessage;
+use modulr_webrtc_message::AgentMessage;
 
 const ROS1: bool = false;
 
