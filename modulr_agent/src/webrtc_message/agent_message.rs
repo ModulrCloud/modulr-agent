@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::webrtc_message::common::{
-    MessageEnvelope, MessageEnvelopeError, MessageFields, SUPPORTED_VERSIONS,
+    CapabilitiesErrorCode, MessageEnvelope, MessageEnvelopeError, MessageFields,
 };
+use crate::webrtc_message::{SUPPORTED_VERSIONS, validate_capabilities};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -33,7 +34,7 @@ pub type MovementCommand = MovementPayload;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CapabilitiesPayload {
-    versions: Vec<String>,
+    pub versions: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -92,8 +93,6 @@ impl MessageFields for AgentMessage {
 }
 
 impl AgentMessage {
-    // TODO: send capabilities and check capabilities of remote
-    #[allow(dead_code)]
     pub fn capabilities() -> Self {
         AgentMessage::Capabilities(CapabilitiesPayload {
             versions: SUPPORTED_VERSIONS.iter().map(|s| s.to_string()).collect(),
@@ -105,8 +104,6 @@ impl AgentMessage {
         AgentMessage::Capabilities(CapabilitiesPayload { versions })
     }
 
-    // TODO: send errors when a signalling-related error occurs
-    #[allow(dead_code)]
     pub fn error(
         code: ErrorCode,
         message: &str,
@@ -142,6 +139,32 @@ impl AgentMessage {
         AgentMessage::Pong(PongPayload {
             correlation_id: correlation_id.to_string(),
         })
+    }
+
+    pub fn capabilities_error_response(
+        caps: &CapabilitiesPayload,
+        correlation_id: Option<&str>,
+    ) -> Option<Self> {
+        let version_strs: Vec<&str> = caps.versions.iter().map(|s| s.as_str()).collect();
+        match validate_capabilities(&version_strs) {
+            Ok(_) => {
+                log::info!("All capabilities supported by agent.");
+                None
+            }
+            Err(err) => {
+                let code = match err.code {
+                    CapabilitiesErrorCode::UnsupportedVersion => ErrorCode::UnsupportedVersion,
+                    CapabilitiesErrorCode::CapabilityMismatch => ErrorCode::CapabilityMismatch,
+                };
+                log::warn!("Error while comparing capabilities: {}", &err.message);
+                Some(AgentMessage::error(
+                    code,
+                    &err.message,
+                    correlation_id,
+                    Some(err.details),
+                ))
+            }
+        }
     }
 
     pub fn from_message(msg: &MessageEnvelope) -> Result<Self, MessageEnvelopeError> {

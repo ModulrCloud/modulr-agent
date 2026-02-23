@@ -400,6 +400,19 @@ impl WebRtcLink {
         peer_connection.on_data_channel(Box::new(move |dc| {
             log::info!("DataChannel opened: {}", dc.label());
 
+            let data_channel_for_open = Arc::clone(&data_channel_clone);
+            dc.on_open(Box::new(move || {
+                let dc_clone = Arc::clone(&data_channel_for_open);
+                Box::pin(async move {
+                    if let Ok(json) = AgentMessage::capabilities().to_message().to_string()
+                        && let Some(dc) = dc_clone.lock().await.as_ref()
+                        && let Err(e) = dc.send_text(json).await
+                    {
+                        log::error!("Failed to send capabilities: {}", e);
+                    }
+                })
+            }));
+
             let listeners_clone = Arc::clone(&listeners_clone);
             let data_channel_for_messages = Arc::clone(&data_channel_clone); // Clone for on_message
             dc.on_message(Box::new(move |msg: DataChannelMessage| {
@@ -430,8 +443,17 @@ impl WebRtcLink {
                                 agent_message
                             )
                         }
-                        AgentMessage::Capabilities(_) => {
-                            log::warn!("Capabilities received, but not currently implemented!")
+                        AgentMessage::Capabilities(ref caps) => {
+                            log::info!("Received capabilities from client: {:?}", caps);
+                            if let Some(err) = AgentMessage::capabilities_error_response(
+                                caps,
+                                envelope.correlation_id.as_deref(),
+                            ) && let Some(dc) = data_channel_clone.lock().await.as_ref()
+                                && let Ok(json) = err.to_message().to_string()
+                                && let Err(e) = dc.send_text(json).await
+                            {
+                                log::error!("Failed to send capabilities error: {}", e);
+                            }
                         }
                         AgentMessage::Ping(PingPayload { correlation_id }) => {
                             let pong = AgentMessage::pong(&correlation_id);
