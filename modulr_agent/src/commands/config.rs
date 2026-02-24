@@ -42,6 +42,14 @@ pub fn get_default_path() -> Option<PathBuf> {
     })
 }
 
+pub fn get_default_key_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|mut path| {
+        path.push("modulr_agent");
+        path.push("agent_key");
+        path
+    })
+}
+
 pub fn read_config(override_path: Option<PathBuf>) -> Result<AgentConfig> {
     let config_path = override_path.or(get_default_path()).ok_or(anyhow::anyhow!(
         "No configuration file provided and default file cannot be found!"

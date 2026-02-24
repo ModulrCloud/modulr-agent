@@ -9,5 +9,5 @@ pub use common::{
 pub use signalling_message::{
     AnswerPayload, ConnectedPayload, DisconnectedPayload, DisconnectionReason,
     ErrorCode as SignalingErrorCode, ErrorPayload as SignalingErrorPayload, IceCandidatePayload,
-    IceConnectionState, RegisterPayload, SignalingMessage,
+    IceConnectionState, PkiChallengePayload, PkiResponsePayload, RegisterPayload, SignalingMessage,
 };

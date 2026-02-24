@@ -8,6 +8,7 @@ use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
 use crate::commands::config::{ImageFormat, VideoSource, read_config};
+use crate::commands::keys::load_signing_key;
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
 use crate::ros_bridge::RosBridge;
@@ -111,7 +112,12 @@ async fn configure_ros_camera_callback(
 }
 
 pub async fn start(args: StartArgs) -> Result<()> {
-    let config = read_config(args.config_override)?;
+    let config = read_config(args.config_override.clone())?;
+    let signing_key = load_signing_key(&args.config_override).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to load signing key: {e}\n\nHave you run initial-setup with enrollment options? Check the Modulr robot registration workflow for more information."
+        )
+    })?;
 
     let robot_id = config.core.robot_id;
     let signaling_url = config.core.signaling_url;
@@ -119,6 +125,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         &robot_id,
         &signaling_url,
         args.allow_skip_cert_check,
+        signing_key,
     )));
     let pipeline = Arc::new(Mutex::new(VideoPipeline::new(config.robot.image_format)));
 
