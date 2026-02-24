@@ -930,4 +930,72 @@ mod tests {
             other => panic!("Expected LocationResponse, got {:?}", other),
         }
     }
+
+    #[test]
+    fn test_location_error_codes_serialise() {
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::LocationNotFound).unwrap(),
+            "\"LOCATION_NOT_FOUND\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::LocationAlreadyExists).unwrap(),
+            "\"LOCATION_ALREADY_EXISTS\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::LocationNameInvalid).unwrap(),
+            "\"LOCATION_NAME_INVALID\""
+        );
+    }
+
+    #[test]
+    fn test_parse_location_response_spec_example() {
+        // Matches response.example.json: two locations, one with full orientation
+        // and z, one with only x/y — also validates optional field handling
+        let envelope = make_envelope(
+            "agent.location.response",
+            Some("c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f"),
+            Some(json!({
+                "operation": "list",
+                "locations": [
+                    {
+                        "name": "Warehouse Loading Dock",
+                        "position": { "x": 12.5, "y": 8.3, "z": 0.0 },
+                        "orientation": { "yaw": 1.60, "pitch": 0.50, "roll": 0.24 }
+                    },
+                    {
+                        "name": "Assembly Station 1",
+                        "position": { "x": 5.2, "y": 10.8 }
+                    }
+                ]
+            })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::LocationResponse(r) => {
+                assert_eq!(r.operation, "list");
+                let locs = r.locations.unwrap();
+                assert_eq!(locs.len(), 2);
+                let dock = &locs[0];
+                assert_eq!(dock.name, "Warehouse Loading Dock");
+                assert_eq!(dock.position.z, Some(0.0));
+                let orient = dock.orientation.as_ref().unwrap();
+                assert_eq!(orient.yaw, Some(1.60));
+                assert_eq!(orient.pitch, Some(0.50));
+                assert_eq!(orient.roll, Some(0.24));
+                let station = &locs[1];
+                assert_eq!(station.name, "Assembly Station 1");
+                assert!(station.position.z.is_none());
+                assert!(station.orientation.is_none());
+            }
+            other => panic!("Expected LocationResponse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_location_list_empty_payload() {
+        // Matches list.example.json which sends payload: {}
+        let envelope = make_envelope("agent.location.list", None, Some(json!({})));
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        assert!(matches!(msg, AgentMessage::LocationList));
+    }
 }
