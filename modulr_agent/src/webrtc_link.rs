@@ -599,7 +599,7 @@ impl WebRtcLink {
                     Message::Text(ref txt) => {
                         log::debug!("WS Text message received: {}", txt);
 
-                        let envelope = match MessageEnvelope::from_str(&txt) {
+                        let envelope = match MessageEnvelope::from_str(txt) {
                             Ok(env) => env,
                             Err(e) => {
                                 log::error!("Failed to parse MessageEnvelope: {e}, raw={}", txt);
