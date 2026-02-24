@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::common::{
-    CapabilitiesErrorCode, MessageEnvelope, MessageEnvelopeError, MessageFields,
-};
+use crate::common::{CapabilitiesErrorCode, MessageEnvelope, MessageEnvelopeError, MessageFields};
 use crate::{SUPPORTED_VERSIONS, validate_capabilities};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -139,6 +137,43 @@ impl AgentMessage {
         AgentMessage::Pong(PongPayload {
             correlation_id: correlation_id.to_string(),
         })
+    }
+
+    pub fn error_from_envelope_error(
+        err: &MessageEnvelopeError,
+        correlation_id: Option<&str>,
+    ) -> Self {
+        let (code, message) = match err {
+            MessageEnvelopeError::JsonParse { reason } => (
+                ErrorCode::InvalidMessage,
+                format!("JSON parse error: {reason}"),
+            ),
+            MessageEnvelopeError::JsonEncode { reason } => (
+                ErrorCode::InternalError,
+                format!("JSON encode error: {reason}"),
+            ),
+            MessageEnvelopeError::MissingFields { fields } => (
+                ErrorCode::InvalidPayload,
+                format!("Missing required fields: {fields:?}"),
+            ),
+            MessageEnvelopeError::OutOfRange {
+                field,
+                value,
+                expected,
+            } => (
+                ErrorCode::ValidationFailed,
+                format!("Value out of range: {field} = {value} (expected {expected})"),
+            ),
+            MessageEnvelopeError::UnknownMessageType { message_type } => (
+                ErrorCode::UnsupportedMessageType,
+                format!("Unknown message type: {message_type}"),
+            ),
+            MessageEnvelopeError::EnvelopeValidation { reason } => (
+                ErrorCode::InvalidMessage,
+                format!("Envelope validation failed: {reason}"),
+            ),
+        };
+        AgentMessage::error(code, &message, correlation_id, None)
     }
 
     pub fn capabilities_error_response(

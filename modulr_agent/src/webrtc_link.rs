@@ -31,9 +31,9 @@ use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 use modulr_webrtc_message::{
-    AgentMessage, AnswerPayload, ConnectedPayload, DisconnectedPayload, DisconnectionReason,
-    IceCandidatePayload, IceConnectionState, MessageEnvelope, PingPayload, RegisterPayload,
-    SignalingMessage, ToMessage,
+    AgentErrorCode, AgentMessage, AnswerPayload, ConnectedPayload, DisconnectedPayload,
+    DisconnectionReason, IceCandidatePayload, IceConnectionState, MessageEnvelope, PingPayload,
+    RegisterPayload, SignalingErrorCode, SignalingMessage, ToMessage,
 };
 
 type MaybeWebSocketWriter =
@@ -423,45 +423,56 @@ impl WebRtcLink {
                     let envelope: MessageEnvelope = match serde_json::from_slice(&msg.data) {
                         Ok(env) => env,
                         Err(e) => {
-                            log::error!("Failed to parse message: {}", e);
+                            log::error!("Failed to parse message envelope: {}", e);
+                            let error_msg = AgentMessage::error(
+                                AgentErrorCode::InvalidMessage,
+                                &format!("Failed to parse message: {e}"),
+                                None,
+                                None,
+                            );
+                            send_agent_error(&data_channel_clone, error_msg).await;
                             return;
                         }
                     };
 
+                    let correlation_id = envelope.correlation_id.as_deref();
+
                     let agent_message = match AgentMessage::from_message(&envelope) {
                         Ok(msg) => msg,
                         Err(e) => {
-                            log::error!("Failed to read message as agent message: {}", e);
+                            log::error!("Failed to parse agent message: {}", e);
+                            let error_msg =
+                                AgentMessage::error_from_envelope_error(&e, correlation_id);
+                            send_agent_error(&data_channel_clone, error_msg).await;
                             return;
                         }
                     };
 
                     match agent_message {
-                        AgentMessage::Error(_) | AgentMessage::Pong(_) => {
+                        AgentMessage::Error(_) => {
                             log::warn!(
-                                "Unexpected message received from client: {:?}",
+                                "Received error from client (ignoring): {:?}",
                                 agent_message
-                            )
+                            );
+                        }
+                        AgentMessage::Pong(_) => {
+                            log::warn!("Received unexpected pong from client: {:?}", agent_message);
                         }
                         AgentMessage::Capabilities(ref caps) => {
                             log::info!("Received capabilities from client: {:?}", caps);
-                            if let Some(err) = AgentMessage::capabilities_error_response(
-                                caps,
-                                envelope.correlation_id.as_deref(),
-                            ) && let Some(dc) = data_channel_clone.lock().await.as_ref()
-                                && let Ok(json) = err.to_message().to_string()
-                                && let Err(e) = dc.send_text(json).await
+                            if let Some(err) =
+                                AgentMessage::capabilities_error_response(caps, correlation_id)
                             {
-                                log::error!("Failed to send capabilities error: {}", e);
+                                send_agent_error(&data_channel_clone, err).await;
                             }
                         }
                         AgentMessage::Ping(PingPayload { correlation_id }) => {
                             let pong = AgentMessage::pong(&correlation_id);
                             if let Some(dc) = data_channel_clone.lock().await.as_ref()
-                                && let Ok(response_json) = serde_json::to_string(&pong)
-                                && let Err(e) = dc.send_text(response_json).await
+                                && let Ok(json) = pong.to_message().to_string()
+                                && let Err(e) = dc.send_text(json).await
                             {
-                                log::error!("Failed to send response: {}", e);
+                                log::error!("Failed to send pong: {}", e);
                             }
                         }
                         AgentMessage::Movement(_) => {
@@ -565,6 +576,7 @@ impl WebRtcLink {
 
     async fn listen(&self) {
         let remote_id_clone = Arc::clone(&self.remote_id);
+        let status_clone = Arc::clone(&self.status);
 
         if self.ws_read.lock().await.is_none() {
             panic!("Listen called before ws_read is valid!");
@@ -584,7 +596,7 @@ impl WebRtcLink {
             // Main WS receive loop
             while let Some(Ok(msg)) = read_clone.lock().await.as_mut().unwrap().next().await {
                 match msg {
-                    Message::Text(txt) => {
+                    Message::Text(ref txt) => {
                         log::debug!("WS Text message received: {}", txt);
 
                         let envelope = match MessageEnvelope::from_str(&txt) {
@@ -729,8 +741,80 @@ impl WebRtcLink {
                                 log::info!("Received capabilities from server: {:?}", caps);
                             }
 
-                            SignalingMessage::Error(err) => {
-                                log::error!("Received error from server: {:?}", err);
+                            SignalingMessage::Error(ref err) => {
+                                let maybe_remote_id = remote_id_clone.lock().await.clone();
+
+                                match err.code {
+                                    SignalingErrorCode::Unauthorized
+                                    | SignalingErrorCode::Forbidden => {
+                                        log::error!(
+                                            "Server rejected connection ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Closed,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    SignalingErrorCode::ConnectionFailed
+                                    | SignalingErrorCode::IceFailed
+                                    | SignalingErrorCode::SdpInvalid => {
+                                        log::error!(
+                                            "Connection error from server ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Failed,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    SignalingErrorCode::Timeout => {
+                                        log::error!("Timeout error from server: {}", err.message);
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Timeout,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    _ => {
+                                        log::error!(
+                                            "Received error from server ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                    }
+                                }
                             }
 
                             SignalingMessage::Connected(connected) => {
@@ -744,8 +828,12 @@ impl WebRtcLink {
                                 );
                             }
 
-                            other => {
-                                log::warn!("Received unexpected signaling message: {:?}", other);
+                            SignalingMessage::Answer(_) => {
+                                log::warn!("Unexpected answer message received: {:?}", msg);
+                            }
+
+                            SignalingMessage::Register(_) => {
+                                log::warn!("Unexpected register message received: {:?}", msg);
                             }
                         }
                     }
@@ -776,6 +864,18 @@ async fn send_signaling_message(ws_write: &MaybeWebSocketWriter, msg: SignalingM
         }
     } else {
         log::warn!("Cannot send signaling message: ws_write is None");
+    }
+}
+
+async fn send_agent_error(
+    data_channel: &Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
+    error_msg: AgentMessage,
+) {
+    if let Some(dc) = data_channel.lock().await.as_ref()
+        && let Ok(json) = error_msg.to_message().to_string()
+        && let Err(e) = dc.send_text(json).await
+    {
+        log::error!("Failed to send agent error: {}", e);
     }
 }
 
