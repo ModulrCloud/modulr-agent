@@ -78,10 +78,10 @@ pub enum ErrorCode {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorPayload {
-    code: ErrorCode,
-    message: String,
+    pub code: ErrorCode,
+    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<serde_json::Value>,
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -185,12 +185,11 @@ impl SignalingMessage {
                         fields: vec!["payload".to_string()],
                     })?;
 
-                let ans: AnswerPayload =
-                    serde_json::from_value(payload.clone()).map_err(|e| {
-                        MessageEnvelopeError::JsonParse {
-                            reason: e.to_string(),
-                        }
-                    })?;
+                let ans: AnswerPayload = serde_json::from_value(payload.clone()).map_err(|e| {
+                    MessageEnvelopeError::JsonParse {
+                        reason: e.to_string(),
+                    }
+                })?;
 
                 if ans.sdp_type != "answer" {
                     return Err(MessageEnvelopeError::EnvelopeValidation {
@@ -501,7 +500,10 @@ mod tests {
         let obj = json_value.as_object().unwrap();
 
         assert!(obj.contains_key("candidate"), "missing 'candidate' key");
-        assert!(obj.contains_key("connectionId"), "missing 'connectionId' key");
+        assert!(
+            obj.contains_key("connectionId"),
+            "missing 'connectionId' key"
+        );
         assert!(obj.contains_key("sdpMid"), "missing 'sdpMid' key");
         assert!(
             obj.contains_key("sdpMLineIndex"),
@@ -591,10 +593,7 @@ mod tests {
         match parsed {
             SignalingMessage::Answer(ans) => {
                 assert_eq!(ans.connection_id, "conn-1");
-                assert_eq!(
-                    ans.sdp,
-                    "v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\n"
-                );
+                assert_eq!(ans.sdp, "v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\n");
                 assert_eq!(ans.sdp_type, "answer");
             }
             other => panic!("Expected Answer, got {:?}", other),
@@ -826,10 +825,7 @@ mod tests {
 
     #[test]
     fn test_error_missing_code() {
-        let envelope = make_envelope(
-            "signalling.error",
-            Some(json!({ "message": "something" })),
-        );
+        let envelope = make_envelope("signalling.error", Some(json!({ "message": "something" })));
         let err = SignalingMessage::from_message(&envelope).unwrap_err();
         assert!(matches!(err, MessageEnvelopeError::JsonParse { .. }));
     }

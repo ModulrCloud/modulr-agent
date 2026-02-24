@@ -46,7 +46,11 @@ mod tests {
     fn test_location_serialises_optional_fields_omitted() {
         let loc = Location {
             name: "Dock A".to_string(),
-            position: Position { x: 1.0, y: 2.0, z: None },
+            position: Position {
+                x: 1.0,
+                y: 2.0,
+                z: None,
+            },
             orientation: None,
             metadata: None,
         };
@@ -74,7 +78,11 @@ mod tests {
     fn test_validate_passes_for_valid_location() {
         let loc = Location {
             name: "Home".to_string(),
-            position: Position { x: 0.0, y: 0.0, z: None },
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+                z: None,
+            },
             orientation: None,
             metadata: None,
         };
@@ -85,7 +93,11 @@ mod tests {
     fn test_validate_fails_for_empty_name() {
         let loc = Location {
             name: "".to_string(),
-            position: Position { x: 0.0, y: 0.0, z: None },
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+                z: None,
+            },
             orientation: None,
             metadata: None,
         };

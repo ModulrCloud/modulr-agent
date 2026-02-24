@@ -155,6 +155,43 @@ impl AgentMessage {
         })
     }
 
+    pub fn error_from_envelope_error(
+        err: &MessageEnvelopeError,
+        correlation_id: Option<&str>,
+    ) -> Self {
+        let (code, message) = match err {
+            MessageEnvelopeError::JsonParse { reason } => (
+                ErrorCode::InvalidMessage,
+                format!("JSON parse error: {reason}"),
+            ),
+            MessageEnvelopeError::JsonEncode { reason } => (
+                ErrorCode::InternalError,
+                format!("JSON encode error: {reason}"),
+            ),
+            MessageEnvelopeError::MissingFields { fields } => (
+                ErrorCode::InvalidPayload,
+                format!("Missing required fields: {fields:?}"),
+            ),
+            MessageEnvelopeError::OutOfRange {
+                field,
+                value,
+                expected,
+            } => (
+                ErrorCode::ValidationFailed,
+                format!("Value out of range: {field} = {value} (expected {expected})"),
+            ),
+            MessageEnvelopeError::UnknownMessageType { message_type } => (
+                ErrorCode::UnsupportedMessageType,
+                format!("Unknown message type: {message_type}"),
+            ),
+            MessageEnvelopeError::EnvelopeValidation { reason } => (
+                ErrorCode::InvalidMessage,
+                format!("Envelope validation failed: {reason}"),
+            ),
+        };
+        AgentMessage::error(code, &message, correlation_id, None)
+    }
+
     #[allow(dead_code)]
     pub fn movement_with_payload(payload: &MovementPayload) -> Self {
         AgentMessage::Movement(payload.clone())
@@ -176,6 +213,10 @@ impl AgentMessage {
         AgentMessage::Pong(PongPayload {
             correlation_id: correlation_id.to_string(),
         })
+    }
+
+    pub fn parse_error_response(reason: &str, correlation_id: Option<&str>) -> Self {
+        AgentMessage::error(ErrorCode::InvalidMessage, reason, correlation_id, None)
     }
 
     pub fn capabilities_error_response(
@@ -318,13 +359,22 @@ impl AgentMessage {
             }
 
             "agent.location.create" | "agent.location.update" => {
-                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
-                    fields: vec!["payload".to_string()],
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
+                let location: Location = serde_json::from_value(payload.clone()).map_err(|e| {
+                    MessageEnvelopeError::JsonParse {
+                        reason: e.to_string(),
+                    }
                 })?;
-                let location: Location = serde_json::from_value(payload.clone())
-                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
-                location.validate()
-                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                location
+                    .validate()
+                    .map_err(|e| MessageEnvelopeError::JsonParse {
+                        reason: e.to_string(),
+                    })?;
                 if msg.message_type == "agent.location.create" {
                     Ok(AgentMessage::LocationCreate(location))
                 } else {
@@ -335,20 +385,32 @@ impl AgentMessage {
             "agent.location.list" => Ok(AgentMessage::LocationList),
 
             "agent.location.delete" => {
-                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
-                    fields: vec!["payload".to_string()],
-                })?;
-                let del: LocationDeletePayload = serde_json::from_value(payload.clone())
-                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
+                let del: LocationDeletePayload =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
                 Ok(AgentMessage::LocationDelete(del))
             }
 
             "agent.location.response" => {
-                let payload = msg.payload.as_ref().ok_or(MessageEnvelopeError::MissingFields {
-                    fields: vec!["payload".to_string()],
-                })?;
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
                 let resp: LocationResponsePayload = serde_json::from_value(payload.clone())
-                    .map_err(|e| MessageEnvelopeError::JsonParse { reason: e.to_string() })?;
+                    .map_err(|e| MessageEnvelopeError::JsonParse {
+                        reason: e.to_string(),
+                    })?;
                 Ok(AgentMessage::LocationResponse(resp))
             }
 

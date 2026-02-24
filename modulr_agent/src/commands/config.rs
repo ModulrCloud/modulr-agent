@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
+use modulr_webrtc_message::Location;
 use serde::{Deserialize, Serialize};
 
 pub use modulr_agent_common::ImageFormat;
@@ -32,6 +33,8 @@ pub struct AgentConfig {
     pub core: CoreConfig,
     #[serde(default)]
     pub robot: RobotConfig,
+    #[serde(default)]
+    pub locations: Vec<Location>,
 }
 
 pub fn get_default_path() -> Option<PathBuf> {
@@ -101,6 +104,7 @@ mod tests {
                 video_source: VideoSource::Ros,
                 image_format: ImageFormat::Raw,
             },
+            locations: vec![],
         };
         let serialized = serde_json::to_string_pretty(&config).unwrap();
         println!("Serialized config: {}", serialized);
@@ -123,6 +127,7 @@ mod tests {
                 video_source: VideoSource::Ros,
                 image_format: ImageFormat::Jpeg,
             },
+            locations: vec![],
         };
         let temp_file = NamedTempFile::new().unwrap();
         write_config(&config, Some(temp_file.path().to_path_buf())).unwrap();
@@ -141,6 +146,7 @@ mod tests {
                 video_source: VideoSource::Ros,
                 image_format: ImageFormat::Jpeg,
             },
+            locations: vec![],
         };
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("fake_dir").join("config.json");

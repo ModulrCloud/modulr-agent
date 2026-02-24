@@ -35,6 +35,7 @@ pub async fn initial_setup(args: InitialSetupArgs) -> Result<()> {
             video_source: args.video_source.unwrap_or_default(),
             image_format: args.image_format,
         },
+        locations: vec![],
     };
     write_config(&config, args.config_override)
 }
