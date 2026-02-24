@@ -476,14 +476,10 @@ impl WebRtcLink {
                         }
                         AgentMessage::Capabilities(ref caps) => {
                             log::info!("Received capabilities from client: {:?}", caps);
-                            if let Some(err) = AgentMessage::capabilities_error_response(
-                                caps,
-                                correlation_id,
-                            ) && let Some(dc) = data_channel_clone.lock().await.as_ref()
-                                && let Ok(json) = err.to_message().to_string()
-                                && let Err(e) = dc.send_text(json).await
+                            if let Some(err) =
+                                AgentMessage::capabilities_error_response(caps, correlation_id)
                             {
-                                log::error!("Failed to send capabilities error: {}", e);
+                                send_agent_error(&data_channel_clone, err).await;
                             }
                         }
                         AgentMessage::Ping(PingPayload { correlation_id }) => {
