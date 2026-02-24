@@ -96,7 +96,7 @@ impl RosBridge for Ros2Bridge {
 
     async fn post_movement_command(
         &mut self,
-        command: &crate::webrtc_message::MovementCommand,
+        command: &modulr_webrtc_message::MovementCommand,
     ) -> Result<(), super::RosBridgeError> {
         let msg = Twist {
             linear: Vector3 {

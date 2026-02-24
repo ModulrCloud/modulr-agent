@@ -2,7 +2,6 @@ mod commands;
 mod ros_bridge;
 mod video_pipeline;
 mod webrtc_link;
-mod webrtc_message;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

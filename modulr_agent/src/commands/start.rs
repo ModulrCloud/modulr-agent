@@ -15,7 +15,7 @@ use crate::video_pipeline::VideoPipeline;
 use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
-use crate::webrtc_message::{MessageEnvelope, SignalingMessage};
+use modulr_webrtc_message::AgentMessage;
 
 const ROS1: bool = false;
 
@@ -135,15 +135,22 @@ pub async fn start(args: StartArgs) -> Result<()> {
     webrtc_link
         .lock()
         .await
-        .on_webrtc_message(Box::new(move |envelope: &MessageEnvelope| {
+        .on_webrtc_message(Box::new(move |msg: &AgentMessage| {
             let bridge_clone = Arc::clone(&bridge_clone);
-            let envelope_clone = envelope.clone();
+            let msg_clone = msg.clone();
             Box::pin(async move {
-                if let Ok(SignalingMessage::Movement(cmd)) =
-                    SignalingMessage::from_message(&envelope_clone)
-                    && let Err(e) = bridge_clone.lock().await.post_movement_command(&cmd).await
-                {
-                    error!("Failed to post movement command: {}", e);
+                match msg_clone {
+                    AgentMessage::Movement(cmd) => {
+                        if let Err(e) = bridge_clone.lock().await.post_movement_command(&cmd).await
+                        {
+                            error!("Failed to post movement command: {}", e);
+                        }
+                    }
+                    // Ignore these messages
+                    AgentMessage::Ping(_)
+                    | AgentMessage::Pong(_)
+                    | AgentMessage::Capabilities(_)
+                    | AgentMessage::Error(_) => (),
                 }
             })
         }))

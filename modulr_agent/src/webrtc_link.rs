@@ -1,12 +1,11 @@
-use crate::webrtc_message::{MessageEnvelope, handle_message};
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use rustls::ClientConfig;
 use rustls::client::{ServerCertVerified, ServerCertVerifier};
-use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -31,15 +30,19 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+use modulr_webrtc_message::{
+    AgentErrorCode, AgentMessage, AnswerPayload, ConnectedPayload, DisconnectedPayload,
+    DisconnectionReason, IceCandidatePayload, IceConnectionState, MessageEnvelope, PingPayload,
+    RegisterPayload, SignalingErrorCode, SignalingMessage, ToMessage,
+};
+
 type MaybeWebSocketWriter =
     Arc<Mutex<Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>>;
 type MaybeWebSocketReader =
     Arc<Mutex<Option<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>>;
 
 pub type OnWebRtcMessageHdlrFn = Box<
-    dyn (FnMut(&MessageEnvelope) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
-        + Send
-        + Sync,
+    dyn (FnMut(&AgentMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
 >;
 
 fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
@@ -138,12 +141,8 @@ pub enum WebRtcLinkError {
     LocalDescriptionFailed,
     #[error("Invalid message for string conversion sent")]
     EncodeMessageFailure,
-    #[error("Invalid message for string conversion received")]
-    ParseMessageFailure,
     #[error("Failed to send message")]
     FailedToSendMessage,
-    #[error("Unrecognised message type received")]
-    UnrecognisedMessage,
     #[error("Failed to write frame to GStreamer")]
     WriteFrameError,
 }
@@ -262,64 +261,136 @@ impl WebRtcLink {
             let robot_id = robot_id.clone();
 
             Box::pin(async move {
-                if let Some(candidate) = c
-                    && let Some(ws_write) = &mut *write_clone.lock().await
-                {
-                    match candidate.to_json() {
-                        Ok(json_candidate) => {
-                            let maybe_to = remote_id.lock().await.clone();
+                let Some(candidate) = c else {
+                    log::debug!("ICE gathering complete (null candidate)");
+                    return;
+                };
 
-                            if let Some(to_id) = maybe_to {
-                                log::debug!(
-                                    "on_ice_candidate: robot_id={}, to={}, candidate={:?}",
-                                    robot_id,
-                                    to_id,
-                                    json_candidate
-                                );
+                let Some(ws_write) = &mut *write_clone.lock().await else {
+                    log::warn!("ICE candidate generated but ws_write is None");
+                    return;
+                };
 
-                                let msg = serde_json::json!({
-                                    "type": "candidate",
-                                    "from": robot_id,
-                                    "to": to_id,
-                                    "candidate": json_candidate
-                                });
+                match candidate.to_json() {
+                    Ok(json_candidate) => {
+                        let maybe_remote_id = remote_id.lock().await.clone();
 
-                                if let Err(e) = ws_write
-                                    .send(tokio_tungstenite::tungstenite::Message::Text(
-                                        serde_json::to_string(&msg).unwrap(),
-                                    ))
-                                    .await
-                                {
-                                    log::warn!("Failed to send ICE candidate to {to_id}: {e}");
-                                } else {
-                                    log::debug!("Sent ICE candidate to browser ({to_id})");
+                        if let Some(remote_id) = maybe_remote_id {
+                            log::debug!(
+                                "on_ice_candidate: robot_id={}, remote_id={}, candidate={:?}",
+                                robot_id,
+                                remote_id,
+                                json_candidate
+                            );
+
+                            let Some(sdp_mid) = json_candidate.sdp_mid else {
+                                log::warn!("No sdp_mid set in ICE candidate, skipping");
+                                return;
+                            };
+
+                            let Some(sdp_m_line_index) = json_candidate.sdp_mline_index else {
+                                log::warn!("No sdp_mline_index set in ICE candidate, skipping");
+                                return;
+                            };
+
+                            let msg = SignalingMessage::IceCandidate(IceCandidatePayload {
+                                candidate: json_candidate.candidate,
+                                connection_id: remote_id.clone(),
+                                sdp_mid,
+                                sdp_m_line_index,
+                                username_fragment: json_candidate.username_fragment,
+                            });
+
+                            let encoded = match msg.to_message().to_string() {
+                                Ok(encoded) => encoded,
+                                Err(e) => {
+                                    log::error!("Error occurred while encoding message: {}", e);
+                                    return;
                                 }
-                            } else {
+                            };
+
+                            if let Err(e) = ws_write
+                                .send(tokio_tungstenite::tungstenite::Message::Text(encoded))
+                                .await
+                            {
                                 log::warn!(
-                                    "ICE candidate generated but remote_id is not set yet; skipping"
+                                    "Failed to send ICE candidate for remote ID {remote_id}: {e}"
                                 );
+                            } else {
+                                log::debug!("Sent ICE candidate for remote ID ({remote_id})");
                             }
-                        }
-                        Err(e) => {
-                            log::error!("Failed to convert ICE candidate to JSON: {e}");
+                        } else {
+                            log::warn!(
+                                "ICE candidate generated but remote_id is not set yet; skipping"
+                            );
                         }
                     }
-                } else {
-                    log::warn!("on_ice_candidate fired with None or no ws_write");
+                    Err(e) => {
+                        log::error!("Failed to convert ICE candidate to JSON: {e}");
+                    }
                 }
             })
         }));
 
-        // On connection state Connected, update our own connected state
+        // On connection state change, update status and send signaling messages
         let status_clone = Arc::clone(&self.status);
+        let write_clone_ice = Arc::clone(&self.ws_write);
+        let remote_id_ice = Arc::clone(&self.remote_id);
         peer_connection.on_ice_connection_state_change(Box::new(move |state| {
             log::info!("ICE connection state changed: {:?}", state);
 
             let status_clone = Arc::clone(&status_clone);
+            let write_clone = Arc::clone(&write_clone_ice);
+            let remote_id = Arc::clone(&remote_id_ice);
+
             Box::pin(async move {
-                if state == RTCIceConnectionState::Connected {
-                    log::info!("ICE state Connected, marking WebRtcLink as Connected");
-                    *status_clone.lock().await = WebRtcLinkStatus::Connected;
+                let maybe_remote_id = remote_id.lock().await.clone();
+
+                match state {
+                    RTCIceConnectionState::Connected => {
+                        log::info!("ICE state Connected, marking WebRtcLink as Connected");
+                        *status_clone.lock().await = WebRtcLinkStatus::Connected;
+
+                        if let Some(remote_id) = maybe_remote_id {
+                            let msg = SignalingMessage::Connected(ConnectedPayload {
+                                connection_id: remote_id,
+                                ice_connection_state: IceConnectionState::Connected,
+                                data_channel_state: None,
+                            });
+                            send_signaling_message(&write_clone, msg).await;
+                        }
+                    }
+                    RTCIceConnectionState::Failed => {
+                        log::warn!("ICE state Failed");
+                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+
+                        if let Some(remote_id) = maybe_remote_id {
+                            let msg = SignalingMessage::Disconnected(DisconnectedPayload {
+                                connection_id: remote_id,
+                                reason: DisconnectionReason::Failed,
+                                ice_connection_state: None,
+                                details: None,
+                            });
+                            send_signaling_message(&write_clone, msg).await;
+                        }
+                    }
+                    RTCIceConnectionState::Disconnected => {
+                        log::warn!("ICE state Disconnected");
+                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+
+                        if let Some(remote_id) = maybe_remote_id {
+                            let msg = SignalingMessage::Disconnected(DisconnectedPayload {
+                                connection_id: remote_id,
+                                reason: DisconnectionReason::Closed,
+                                ice_connection_state: None,
+                                details: None,
+                            });
+                            send_signaling_message(&write_clone, msg).await;
+                        }
+                    }
+                    _ => {
+                        log::debug!("ICE connection state: {:?} (no action needed)", state);
+                    }
                 }
             })
         }));
@@ -328,6 +399,19 @@ impl WebRtcLink {
         let data_channel_clone = Arc::clone(&self.data_channel);
         peer_connection.on_data_channel(Box::new(move |dc| {
             log::info!("DataChannel opened: {}", dc.label());
+
+            let data_channel_for_open = Arc::clone(&data_channel_clone);
+            dc.on_open(Box::new(move || {
+                let dc_clone = Arc::clone(&data_channel_for_open);
+                Box::pin(async move {
+                    if let Ok(json) = AgentMessage::capabilities().to_message().to_string()
+                        && let Some(dc) = dc_clone.lock().await.as_ref()
+                        && let Err(e) = dc.send_text(json).await
+                    {
+                        log::error!("Failed to send capabilities: {}", e);
+                    }
+                })
+            }));
 
             let listeners_clone = Arc::clone(&listeners_clone);
             let data_channel_for_messages = Arc::clone(&data_channel_clone); // Clone for on_message
@@ -339,21 +423,63 @@ impl WebRtcLink {
                     let envelope: MessageEnvelope = match serde_json::from_slice(&msg.data) {
                         Ok(env) => env,
                         Err(e) => {
-                            log::error!("Failed to parse message: {}", e);
+                            log::error!("Failed to parse message envelope: {}", e);
+                            let error_msg = AgentMessage::error(
+                                AgentErrorCode::InvalidMessage,
+                                &format!("Failed to parse message: {e}"),
+                                None,
+                                None,
+                            );
+                            send_agent_error(&data_channel_clone, error_msg).await;
                             return;
                         }
                     };
 
-                    if let Some(response) = handle_message(&envelope)
-                        && let Some(dc) = data_channel_clone.lock().await.as_ref()
-                        && let Ok(response_json) = serde_json::to_string(&response)
-                        && let Err(e) = dc.send_text(response_json).await
-                    {
-                        log::error!("Failed to send response: {}", e);
-                    }
+                    let correlation_id = envelope.correlation_id.as_deref();
 
-                    for listener in listeners_clone.lock().await.iter_mut() {
-                        tokio::spawn(listener(&envelope));
+                    let agent_message = match AgentMessage::from_message(&envelope) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            log::error!("Failed to parse agent message: {}", e);
+                            let error_msg =
+                                AgentMessage::error_from_envelope_error(&e, correlation_id);
+                            send_agent_error(&data_channel_clone, error_msg).await;
+                            return;
+                        }
+                    };
+
+                    match agent_message {
+                        AgentMessage::Error(_) => {
+                            log::warn!(
+                                "Received error from client (ignoring): {:?}",
+                                agent_message
+                            );
+                        }
+                        AgentMessage::Pong(_) => {
+                            log::warn!("Received unexpected pong from client: {:?}", agent_message);
+                        }
+                        AgentMessage::Capabilities(ref caps) => {
+                            log::info!("Received capabilities from client: {:?}", caps);
+                            if let Some(err) =
+                                AgentMessage::capabilities_error_response(caps, correlation_id)
+                            {
+                                send_agent_error(&data_channel_clone, err).await;
+                            }
+                        }
+                        AgentMessage::Ping(PingPayload { correlation_id }) => {
+                            let pong = AgentMessage::pong(&correlation_id);
+                            if let Some(dc) = data_channel_clone.lock().await.as_ref()
+                                && let Ok(json) = pong.to_message().to_string()
+                                && let Err(e) = dc.send_text(json).await
+                            {
+                                log::error!("Failed to send pong: {}", e);
+                            }
+                        }
+                        AgentMessage::Movement(_) => {
+                            for listener in listeners_clone.lock().await.iter_mut() {
+                                tokio::spawn(listener(&agent_message));
+                            }
+                        }
                     }
                 })
             }));
@@ -390,16 +516,16 @@ impl WebRtcLink {
             return Err(WebRtcLinkError::IncorrectStateForOperation);
         }
 
-        let register_msg = SignalMessage {
-            r#type: "register".into(),
-            from: Some(self.local_id.clone()),
-            to: None,
-            sdp: None,
-            candidate: None,
-        };
+        let register_msg = SignalingMessage::Register(RegisterPayload {
+            agent_id: self.local_id.clone(),
+            capabilities: None,
+            metadata: None,
+        });
 
         if let Some(ws_write) = &mut *self.ws_write.lock().await {
-            let encoded = serde_json::to_string(&register_msg)
+            let encoded = register_msg
+                .to_message()
+                .to_string()
                 .map_err(|_| WebRtcLinkError::EncodeMessageFailure)?;
             log::debug!("Sending register message: {encoded}");
 
@@ -450,6 +576,7 @@ impl WebRtcLink {
 
     async fn listen(&self) {
         let remote_id_clone = Arc::clone(&self.remote_id);
+        let status_clone = Arc::clone(&self.status);
 
         if self.ws_read.lock().await.is_none() {
             panic!("Listen called before ws_read is valid!");
@@ -469,61 +596,48 @@ impl WebRtcLink {
             // Main WS receive loop
             while let Some(Ok(msg)) = read_clone.lock().await.as_mut().unwrap().next().await {
                 match msg {
-                    Message::Text(txt) => {
+                    Message::Text(ref txt) => {
                         log::debug!("WS Text message received: {}", txt);
 
-                        let parsed = serde_json::from_str::<SignalMessage>(&txt);
-                        let signal = match parsed {
-                            Ok(sig) => sig,
+                        let envelope = match MessageEnvelope::from_str(txt) {
+                            Ok(env) => env,
                             Err(e) => {
-                                log::error!("Failed to parse SignalMessage: {e}, raw={}", txt);
+                                log::error!("Failed to parse MessageEnvelope: {e}, raw={}", txt);
                                 continue;
                             }
                         };
 
-                        log::debug!(
-                            "SignalMessage parsed: type={}, from={:?}, to={:?}, has_sdp={}, has_candidate={}",
-                            signal.r#type,
-                            signal.from,
-                            signal.to,
-                            signal.sdp.is_some(),
-                            signal.candidate.is_some()
-                        );
+                        let signaling_msg = match SignalingMessage::from_message(&envelope) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                log::error!("Failed to parse SignalingMessage: {e}, raw={}", txt);
+                                continue;
+                            }
+                        };
 
-                        match signal.r#type.as_str() {
-                            "offer" => {
+                        log::debug!("SignalingMessage parsed: {:?}", signaling_msg);
+
+                        match signaling_msg {
+                            SignalingMessage::Offer(offer) => {
                                 log::info!(
-                                    "Processing offer: robot_id={}, from={:?}, to={:?}",
+                                    "Processing offer: robot_id={}, connection_id={}",
                                     robot_id,
-                                    signal.from,
-                                    signal.to
+                                    offer.connection_id
                                 );
 
-                                let sdp = match signal.sdp {
-                                    Some(s) => s,
-                                    None => {
-                                        log::error!("Offer message missing SDP");
-                                        return Err(WebRtcLinkError::ParseMessageFailure);
-                                    }
-                                };
+                                log::debug!("Offer SDP length: {}", offer.sdp.len());
 
-                                log::debug!("Offer SDP length: {}", sdp.len());
-
-                                let offer = RTCSessionDescription::offer(sdp)
+                                let rtc_offer = RTCSessionDescription::offer(offer.sdp.clone())
                                     .expect("Could not build SDP from offer");
 
-                                if let Some(from) = &signal.from {
-                                    *remote_id_clone.lock().await = Some(from.clone());
-                                    log::info!("Set remote_id to {}", from);
-                                } else {
-                                    log::warn!("Offer received without 'from', remote_id not set");
-                                }
+                                *remote_id_clone.lock().await = Some(offer.connection_id.clone());
+                                log::info!("Set remote_id to {}", offer.connection_id);
 
                                 let video_track = add_video_track(&peer_connection_clone).await?;
                                 video_track_clone.lock().await.replace(video_track);
 
                                 if let Some(pc) = peer_connection_clone.lock().await.as_mut() {
-                                    pc.set_remote_description(offer)
+                                    pc.set_remote_description(rtc_offer)
                                         .await
                                         .map_err(|_| WebRtcLinkError::RemoteDescriptionFailed)?;
 
@@ -561,11 +675,10 @@ impl WebRtcLink {
 
                                     log::debug!("Answer SDP length: {}", answer.sdp.len());
 
-                                    let answer_msg = serde_json::json!({
-                                        "type": "answer",
-                                        "from": robot_id,
-                                        "to": signal.from,
-                                        "sdp": answer.sdp,
+                                    let answer_msg = SignalingMessage::Answer(AnswerPayload {
+                                        connection_id: offer.connection_id.clone(),
+                                        sdp: answer.sdp.clone(),
+                                        sdp_type: "answer".to_string(),
                                     });
 
                                     pc.set_local_description(answer)
@@ -575,7 +688,9 @@ impl WebRtcLink {
                                     log::info!("Local description set, sending answer");
 
                                     if let Some(w) = write_clone.lock().await.as_mut() {
-                                        let encoded = serde_json::to_string(&answer_msg)
+                                        let encoded = answer_msg
+                                            .to_message()
+                                            .to_string()
                                             .map_err(|_| WebRtcLinkError::EncodeMessageFailure)?;
                                         log::debug!("Sending answer message: {}", encoded);
                                         w.send(Message::Text(encoded))
@@ -588,51 +703,137 @@ impl WebRtcLink {
                                     log::error!("PeerConnection is None in offer handler");
                                 }
                             }
-                            "candidate" => {
+
+                            SignalingMessage::IceCandidate(ice) => {
                                 log::info!(
-                                    "Processing remote candidate: from={:?}, to={:?}",
-                                    signal.from,
-                                    signal.to
+                                    "Processing remote ICE candidate: connection_id={}",
+                                    ice.connection_id
                                 );
 
-                                if let Some(candidate_json) = signal.candidate {
-                                    log::debug!("Remote candidate JSON: {}", candidate_json);
+                                log::debug!("Remote candidate: {}", ice.candidate);
 
-                                    let candidate: RTCIceCandidateInit =
-                                        serde_json::from_value(candidate_json)
-                                            .map_err(|_| WebRtcLinkError::ParseMessageFailure)?;
+                                let candidate = RTCIceCandidateInit {
+                                    candidate: ice.candidate,
+                                    sdp_mid: Some(ice.sdp_mid),
+                                    sdp_mline_index: Some(ice.sdp_m_line_index),
+                                    username_fragment: ice.username_fragment,
+                                };
 
-                                    let remote_desc_is_set = *remote_desc_set_clone.lock().await;
+                                let remote_desc_is_set = *remote_desc_set_clone.lock().await;
 
-                                    if !remote_desc_is_set {
-                                        log::info!(
-                                            "Remote description not set yet, buffering ICE candidate"
-                                        );
-                                        pending_remote_candidates_clone
-                                            .lock()
-                                            .await
-                                            .push(candidate);
-                                    } else if let Some(pc) =
-                                        peer_connection_clone.lock().await.as_mut()
-                                    {
-                                        log::info!("Adding remote ICE candidate");
-                                        pc.add_ice_candidate(candidate)
-                                            .await
-                                            .map_err(|_| WebRtcLinkError::AddIceCandidateFailed)?;
-                                    } else {
-                                        log::error!("PeerConnection is None in candidate handler");
-                                    }
+                                if !remote_desc_is_set {
+                                    log::info!(
+                                        "Remote description not set yet, buffering ICE candidate"
+                                    );
+                                    pending_remote_candidates_clone.lock().await.push(candidate);
+                                } else if let Some(pc) = peer_connection_clone.lock().await.as_mut()
+                                {
+                                    log::info!("Adding remote ICE candidate");
+                                    pc.add_ice_candidate(candidate)
+                                        .await
+                                        .map_err(|_| WebRtcLinkError::AddIceCandidateFailed)?;
                                 } else {
-                                    log::warn!("Candidate message with no candidate field");
+                                    log::error!("PeerConnection is None in candidate handler");
                                 }
                             }
-                            other => {
+
+                            SignalingMessage::Capabilities(caps) => {
+                                log::info!("Received capabilities from server: {:?}", caps);
+                            }
+
+                            SignalingMessage::Error(ref err) => {
+                                let maybe_remote_id = remote_id_clone.lock().await.clone();
+
+                                match err.code {
+                                    SignalingErrorCode::Unauthorized
+                                    | SignalingErrorCode::Forbidden => {
+                                        log::error!(
+                                            "Server rejected connection ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Closed,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    SignalingErrorCode::ConnectionFailed
+                                    | SignalingErrorCode::IceFailed
+                                    | SignalingErrorCode::SdpInvalid => {
+                                        log::error!(
+                                            "Connection error from server ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Failed,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    SignalingErrorCode::Timeout => {
+                                        log::error!("Timeout error from server: {}", err.message);
+                                        *status_clone.lock().await = WebRtcLinkStatus::Disconnected;
+                                        if let Some(remote_id) = maybe_remote_id {
+                                            let msg = SignalingMessage::Disconnected(
+                                                DisconnectedPayload {
+                                                    connection_id: remote_id,
+                                                    reason: DisconnectionReason::Timeout,
+                                                    ice_connection_state: None,
+                                                    details: Some(serde_json::json!({
+                                                        "error": err.message,
+                                                    })),
+                                                },
+                                            );
+                                            send_signaling_message(&write_clone, msg).await;
+                                        }
+                                    }
+                                    _ => {
+                                        log::error!(
+                                            "Received error from server ({}): {}",
+                                            serde_json::to_string(&err.code).unwrap_or_default(),
+                                            err.message
+                                        );
+                                    }
+                                }
+                            }
+
+                            SignalingMessage::Connected(connected) => {
+                                log::info!("Received connected notification: {:?}", connected);
+                            }
+
+                            SignalingMessage::Disconnected(disconnected) => {
                                 log::warn!(
-                                    "Unrecognised message type received: {} (full message: {:?})",
-                                    other,
-                                    signal
+                                    "Received disconnected notification: {:?}",
+                                    disconnected
                                 );
-                                return Err(WebRtcLinkError::UnrecognisedMessage);
+                            }
+
+                            SignalingMessage::Answer(_) => {
+                                log::warn!("Unexpected answer message received: {:?}", msg);
+                            }
+
+                            SignalingMessage::Register(_) => {
+                                log::warn!("Unexpected register message received: {:?}", msg);
                             }
                         }
                     }
@@ -648,13 +849,34 @@ impl WebRtcLink {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct SignalMessage {
-    r#type: String,
-    from: Option<String>,
-    to: Option<String>,
-    sdp: Option<String>,
-    candidate: Option<serde_json::Value>,
+async fn send_signaling_message(ws_write: &MaybeWebSocketWriter, msg: SignalingMessage) {
+    if let Some(ws) = &mut *ws_write.lock().await {
+        match msg.to_message().to_string() {
+            Ok(encoded) => {
+                if let Err(e) = ws
+                    .send(tokio_tungstenite::tungstenite::Message::Text(encoded))
+                    .await
+                {
+                    log::error!("Failed to send signaling message: {e}");
+                }
+            }
+            Err(e) => log::error!("Failed to encode signaling message: {e}"),
+        }
+    } else {
+        log::warn!("Cannot send signaling message: ws_write is None");
+    }
+}
+
+async fn send_agent_error(
+    data_channel: &Arc<Mutex<Option<Arc<RTCDataChannel>>>>,
+    error_msg: AgentMessage,
+) {
+    if let Some(dc) = data_channel.lock().await.as_ref()
+        && let Ok(json) = error_msg.to_message().to_string()
+        && let Err(e) = dc.send_text(json).await
+    {
+        log::error!("Failed to send agent error: {}", e);
+    }
 }
 
 async fn add_video_track(

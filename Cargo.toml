@@ -3,6 +3,7 @@ members = [
     "modulr_agent",
     "modulr_agent_common",
     "modulr_ros_messages",
+    "modulr_webrtc_message",
     "modulr_zenoh_interface",
 ]
 resolver = "2"
