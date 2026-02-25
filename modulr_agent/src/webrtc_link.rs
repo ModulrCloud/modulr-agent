@@ -42,7 +42,9 @@ type MaybeWebSocketReader =
     Arc<Mutex<Option<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>>;
 
 pub type OnWebRtcMessageHdlrFn = Box<
-    dyn (FnMut(&AgentMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
+    dyn (FnMut(&AgentMessage, &MessageEnvelope) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
+        + Send
+        + Sync,
 >;
 
 fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
@@ -202,6 +204,20 @@ impl WebRtcLink {
 
     pub async fn is_connected(&self) -> bool {
         *self.status.lock().await == WebRtcLinkStatus::Connected
+    }
+
+    pub async fn send_data_channel_message(
+        &self,
+        envelope: &MessageEnvelope,
+    ) -> Result<(), WebRtcLinkError> {
+        let encoded =
+            serde_json::to_string(envelope).map_err(|_| WebRtcLinkError::EncodeMessageFailure)?;
+        if let Some(dc) = self.data_channel.lock().await.as_ref() {
+            dc.send_text(encoded)
+                .await
+                .map_err(|_| WebRtcLinkError::FailedToSendMessage)?;
+        }
+        Ok(())
     }
 
     pub async fn try_connect(&mut self) -> Result<(), WebRtcLinkError> {
@@ -475,9 +491,14 @@ impl WebRtcLink {
                                 log::error!("Failed to send pong: {}", e);
                             }
                         }
-                        AgentMessage::Movement(_) => {
+                        AgentMessage::Movement(_)
+                        | AgentMessage::LocationCreate(_)
+                        | AgentMessage::LocationDelete(_)
+                        | AgentMessage::LocationList
+                        | AgentMessage::LocationResponse(_)
+                        | AgentMessage::LocationUpdate(_) => {
                             for listener in listeners_clone.lock().await.iter_mut() {
-                                tokio::spawn(listener(&agent_message));
+                                tokio::spawn(listener(&agent_message, &envelope));
                             }
                         }
                     }
