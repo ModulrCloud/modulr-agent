@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::fmt;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
@@ -6,6 +7,39 @@ use modulr_webrtc_message::Location;
 use serde::{Deserialize, Serialize};
 
 pub use modulr_agent_common::ImageFormat;
+
+#[derive(Debug)]
+pub enum LocationError {
+    NameInvalid(String),
+    AlreadyExists(String),
+    NotFound(String),
+    PersistFailed(anyhow::Error),
+}
+
+impl fmt::Display for LocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocationError::NameInvalid(name) => {
+                write!(f, "location name '{}' must not have leading or trailing whitespace", name)
+            }
+            LocationError::AlreadyExists(name) => {
+                write!(f, "location '{}' already exists", name)
+            }
+            LocationError::NotFound(name) => {
+                write!(f, "location '{}' not found", name)
+            }
+            LocationError::PersistFailed(e) => {
+                write!(f, "failed to persist location: {}", e)
+            }
+        }
+    }
+}
+
+pub struct ConfigContext {
+    pub core: CoreConfig,
+    pub robot: RobotConfig,
+    pub config_path: Option<PathBuf>,
+}
 
 #[derive(Parser, Default, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
 pub enum VideoSource {
@@ -79,6 +113,84 @@ pub fn write_config(config: &AgentConfig, override_path: Option<PathBuf>) -> Res
             &config_path.display()
         )
     })
+}
+
+impl ConfigContext {
+    fn build_config(&self, locations: &[Location]) -> AgentConfig {
+        AgentConfig {
+            core: CoreConfig {
+                robot_id: self.core.robot_id.clone(),
+                signaling_url: self.core.signaling_url.clone(),
+            },
+            robot: RobotConfig {
+                video_source: self.robot.video_source.clone(),
+                image_format: self.robot.image_format,
+            },
+            locations: locations.to_vec(),
+        }
+    }
+
+    fn persist(&self, locations: &[Location]) -> std::result::Result<(), LocationError> {
+        write_config(&self.build_config(locations), self.config_path.clone())
+            .map_err(LocationError::PersistFailed)
+    }
+}
+
+pub fn create_location(
+    locations: &mut Vec<Location>,
+    location: Location,
+    ctx: &ConfigContext,
+) -> std::result::Result<(), LocationError> {
+    if location.name != location.name.trim() {
+        return Err(LocationError::NameInvalid(location.name));
+    }
+    if locations.iter().any(|l| l.name == location.name) {
+        return Err(LocationError::AlreadyExists(location.name));
+    }
+    locations.push(location);
+    if let Err(e) = ctx.persist(locations) {
+        locations.pop();
+        return Err(e);
+    }
+    Ok(())
+}
+
+pub fn update_location(
+    locations: &mut Vec<Location>,
+    location: Location,
+    ctx: &ConfigContext,
+) -> std::result::Result<(), LocationError> {
+    if location.name != location.name.trim() {
+        return Err(LocationError::NameInvalid(location.name));
+    }
+    let pos = locations
+        .iter()
+        .position(|l| l.name == location.name)
+        .ok_or_else(|| LocationError::NotFound(location.name.clone()))?;
+    let old_location = locations[pos].clone();
+    locations[pos] = location;
+    if let Err(e) = ctx.persist(locations) {
+        locations[pos] = old_location;
+        return Err(e);
+    }
+    Ok(())
+}
+
+pub fn delete_location(
+    locations: &mut Vec<Location>,
+    name: &str,
+    ctx: &ConfigContext,
+) -> std::result::Result<(), LocationError> {
+    let pos = locations
+        .iter()
+        .position(|l| l.name == name)
+        .ok_or_else(|| LocationError::NotFound(name.to_string()))?;
+    let removed = locations.remove(pos);
+    if let Err(e) = ctx.persist(locations) {
+        locations.insert(pos, removed);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

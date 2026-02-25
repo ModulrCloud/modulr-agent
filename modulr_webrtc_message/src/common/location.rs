@@ -103,4 +103,5 @@ mod tests {
         };
         assert!(loc.validate().is_err());
     }
+
 }

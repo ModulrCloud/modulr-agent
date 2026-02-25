@@ -8,7 +8,8 @@ use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
 use crate::commands::config::{
-    AgentConfig, CoreConfig, ImageFormat, RobotConfig, VideoSource, read_config, write_config,
+    ConfigContext, CoreConfig, ImageFormat, LocationError, RobotConfig, VideoSource,
+    create_location, delete_location, read_config, update_location,
 };
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
@@ -144,7 +145,17 @@ pub async fn start(args: StartArgs) -> Result<()> {
     let bridge_clone = Arc::clone(&bridge);
     let locations_clone = Arc::clone(&locations);
     let webrtc_link_clone_for_msg = Arc::clone(&webrtc_link);
-    let config_path_clone = config_path.clone();
+    let config_ctx = Arc::new(ConfigContext {
+        core: CoreConfig {
+            robot_id: robot_id.clone(),
+            signaling_url: signaling_url.clone(),
+        },
+        robot: RobotConfig {
+            video_source: video_source.clone(),
+            image_format,
+        },
+        config_path: config_path.clone(),
+    });
     webrtc_link
         .lock()
         .await
@@ -153,10 +164,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
                 let bridge_clone = Arc::clone(&bridge_clone);
                 let locations_clone = Arc::clone(&locations_clone);
                 let webrtc_link_clone = Arc::clone(&webrtc_link_clone_for_msg);
-                let config_path_clone = config_path_clone.clone();
-                let robot_id_clone = robot_id.clone();
-                let signaling_url_clone = signaling_url.clone();
-                let video_source_clone = video_source.clone();
+                let config_ctx_clone = Arc::clone(&config_ctx);
                 let msg_clone = msg.clone();
                 let envelope_clone = envelope.clone();
                 Box::pin(async move {
@@ -188,84 +196,8 @@ pub async fn start(args: StartArgs) -> Result<()> {
                         }
                         AgentMessage::LocationCreate(location) => {
                             let mut locs = locations_clone.lock().await;
-                            if location.name != location.name.trim() {
-                                drop(locs);
-                                let err_envelope = AgentMessage::error(
-                                    ErrorCode::LocationNameInvalid,
-                                    &format!(
-                                        "location name '{}' must not have leading or trailing whitespace",
-                                        location.name
-                                    ),
-                                    Some(&envelope_clone.id),
-                                    Some(serde_json::json!({
-                                        "operation": "create",
-                                        "requestedName": location.name,
-                                    })),
-                                )
-                                .to_message();
-                                if let Err(e) = webrtc_link_clone
-                                    .lock()
-                                    .await
-                                    .send_data_channel_message(&err_envelope)
-                                    .await
-                                {
-                                    error!("Failed to send location create error: {}", e);
-                                }
-                            } else if locs.iter().any(|l| l.name == location.name) {
-                                drop(locs);
-                                let err_envelope = AgentMessage::error(
-                                    ErrorCode::LocationAlreadyExists,
-                                    &format!("location '{}' already exists", location.name),
-                                    Some(&envelope_clone.id),
-                                    Some(serde_json::json!({
-                                        "operation": "create",
-                                        "requestedName": location.name,
-                                    })),
-                                )
-                                .to_message();
-                                if let Err(e) = webrtc_link_clone
-                                    .lock()
-                                    .await
-                                    .send_data_channel_message(&err_envelope)
-                                    .await
-                                {
-                                    error!("Failed to send location create error: {}", e);
-                                }
-                            } else {
-                                locs.push(location.clone());
-                                if let Err(e) = write_config(
-                                    &AgentConfig {
-                                        core: CoreConfig {
-                                            robot_id: robot_id_clone,
-                                            signaling_url: signaling_url_clone,
-                                        },
-                                        robot: RobotConfig {
-                                            video_source: video_source_clone,
-                                            image_format,
-                                        },
-                                        locations: locs.clone(),
-                                    },
-                                    config_path_clone,
-                                ) {
-                                    locs.pop();
-                                    drop(locs);
-                                    error!("Failed to persist locations: {}", e);
-                                    let err_envelope = AgentMessage::error(
-                                        ErrorCode::InternalError,
-                                        "Failed to persist location",
-                                        Some(&envelope_clone.id),
-                                        Some(serde_json::json!({ "operation": "create" })),
-                                    )
-                                    .to_message();
-                                    if let Err(e) = webrtc_link_clone
-                                        .lock()
-                                        .await
-                                        .send_data_channel_message(&err_envelope)
-                                        .await
-                                    {
-                                        error!("Failed to send location create error: {}", e);
-                                    }
-                                } else {
+                            match create_location(&mut locs, location, &config_ctx_clone) {
+                                Ok(()) => {
                                     drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
@@ -284,60 +216,31 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                         error!("Failed to send location create response: {}", e);
                                     }
                                 }
-                            }
-                        }
-                        AgentMessage::LocationUpdate(location) => {
-                            let mut locs = locations_clone.lock().await;
-                            if location.name != location.name.trim() {
-                                drop(locs);
-                                let err_envelope = AgentMessage::error(
-                                    ErrorCode::LocationNameInvalid,
-                                    &format!(
-                                        "location name '{}' must not have leading or trailing whitespace",
-                                        location.name
-                                    ),
-                                    Some(&envelope_clone.id),
-                                    Some(serde_json::json!({
-                                        "operation": "update",
-                                        "requestedName": location.name,
-                                    })),
-                                )
-                                .to_message();
-                                if let Err(e) = webrtc_link_clone
-                                    .lock()
-                                    .await
-                                    .send_data_channel_message(&err_envelope)
-                                    .await
-                                {
-                                    error!("Failed to send location update error: {}", e);
-                                }
-                            } else if let Some(pos) =
-                                locs.iter().position(|l| l.name == location.name)
-                            {
-                                let old_location = locs[pos].clone();
-                                locs[pos] = location;
-                                if let Err(e) = write_config(
-                                    &AgentConfig {
-                                        core: CoreConfig {
-                                            robot_id: robot_id_clone,
-                                            signaling_url: signaling_url_clone,
-                                        },
-                                        robot: RobotConfig {
-                                            video_source: video_source_clone,
-                                            image_format,
-                                        },
-                                        locations: locs.clone(),
-                                    },
-                                    config_path_clone,
-                                ) {
-                                    locs[pos] = old_location;
+                                Err(ref err) => {
                                     drop(locs);
-                                    error!("Failed to persist locations: {}", e);
+                                    let (code, details) = match err {
+                                        LocationError::NameInvalid(name) => (
+                                            ErrorCode::LocationNameInvalid,
+                                            serde_json::json!({ "operation": "create", "requestedName": name }),
+                                        ),
+                                        LocationError::AlreadyExists(name) => (
+                                            ErrorCode::LocationAlreadyExists,
+                                            serde_json::json!({ "operation": "create", "requestedName": name }),
+                                        ),
+                                        LocationError::PersistFailed(_) => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "create" }),
+                                        ),
+                                        _ => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "create" }),
+                                        ),
+                                    };
                                     let err_envelope = AgentMessage::error(
-                                        ErrorCode::InternalError,
-                                        "Failed to persist location",
+                                        code,
+                                        &err.to_string(),
                                         Some(&envelope_clone.id),
-                                        Some(serde_json::json!({ "operation": "update" })),
+                                        Some(details),
                                     )
                                     .to_message();
                                     if let Err(e) = webrtc_link_clone
@@ -346,9 +249,15 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                         .send_data_channel_message(&err_envelope)
                                         .await
                                     {
-                                        error!("Failed to send location update error: {}", e);
+                                        error!("Failed to send location create error: {}", e);
                                     }
-                                } else {
+                                }
+                            }
+                        }
+                        AgentMessage::LocationUpdate(location) => {
+                            let mut locs = locations_clone.lock().await;
+                            match update_location(&mut locs, location, &config_ctx_clone) {
+                                Ok(()) => {
                                     drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
@@ -367,54 +276,31 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                         error!("Failed to send location update response: {}", e);
                                     }
                                 }
-                            } else {
-                                drop(locs);
-                                let err_envelope = AgentMessage::error(
-                                    ErrorCode::LocationNotFound,
-                                    &format!("location '{}' not found", location.name),
-                                    Some(&envelope_clone.id),
-                                    Some(serde_json::json!({
-                                        "operation": "update",
-                                        "requestedName": location.name,
-                                    })),
-                                )
-                                .to_message();
-                                if let Err(e) = webrtc_link_clone
-                                    .lock()
-                                    .await
-                                    .send_data_channel_message(&err_envelope)
-                                    .await
-                                {
-                                    error!("Failed to send location update error: {}", e);
-                                }
-                            }
-                        }
-                        AgentMessage::LocationDelete(payload) => {
-                            let mut locs = locations_clone.lock().await;
-                            if let Some(pos) = locs.iter().position(|l| l.name == payload.name) {
-                                let removed = locs.remove(pos);
-                                if let Err(e) = write_config(
-                                    &AgentConfig {
-                                        core: CoreConfig {
-                                            robot_id: robot_id_clone,
-                                            signaling_url: signaling_url_clone,
-                                        },
-                                        robot: RobotConfig {
-                                            video_source: video_source_clone,
-                                            image_format,
-                                        },
-                                        locations: locs.clone(),
-                                    },
-                                    config_path_clone,
-                                ) {
-                                    locs.insert(pos, removed);
+                                Err(ref err) => {
                                     drop(locs);
-                                    error!("Failed to persist locations: {}", e);
+                                    let (code, details) = match err {
+                                        LocationError::NameInvalid(name) => (
+                                            ErrorCode::LocationNameInvalid,
+                                            serde_json::json!({ "operation": "update", "requestedName": name }),
+                                        ),
+                                        LocationError::NotFound(name) => (
+                                            ErrorCode::LocationNotFound,
+                                            serde_json::json!({ "operation": "update", "requestedName": name }),
+                                        ),
+                                        LocationError::PersistFailed(_) => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "update" }),
+                                        ),
+                                        _ => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "update" }),
+                                        ),
+                                    };
                                     let err_envelope = AgentMessage::error(
-                                        ErrorCode::InternalError,
-                                        "Failed to persist location",
+                                        code,
+                                        &err.to_string(),
                                         Some(&envelope_clone.id),
-                                        Some(serde_json::json!({ "operation": "delete" })),
+                                        Some(details),
                                     )
                                     .to_message();
                                     if let Err(e) = webrtc_link_clone
@@ -423,9 +309,15 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                         .send_data_channel_message(&err_envelope)
                                         .await
                                     {
-                                        error!("Failed to send location delete error: {}", e);
+                                        error!("Failed to send location update error: {}", e);
                                     }
-                                } else {
+                                }
+                            }
+                        }
+                        AgentMessage::LocationDelete(payload) => {
+                            let mut locs = locations_clone.lock().await;
+                            match delete_location(&mut locs, &payload.name, &config_ctx_clone) {
+                                Ok(()) => {
                                     drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
@@ -444,25 +336,37 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                         error!("Failed to send location delete response: {}", e);
                                     }
                                 }
-                            } else {
-                                drop(locs);
-                                let err_envelope = AgentMessage::error(
-                                    ErrorCode::LocationNotFound,
-                                    &format!("location '{}' not found", payload.name),
-                                    Some(&envelope_clone.id),
-                                    Some(serde_json::json!({
-                                        "operation": "delete",
-                                        "requestedName": payload.name,
-                                    })),
-                                )
-                                .to_message();
-                                if let Err(e) = webrtc_link_clone
-                                    .lock()
-                                    .await
-                                    .send_data_channel_message(&err_envelope)
-                                    .await
-                                {
-                                    error!("Failed to send location delete error: {}", e);
+                                Err(ref err) => {
+                                    drop(locs);
+                                    let (code, details) = match err {
+                                        LocationError::NotFound(name) => (
+                                            ErrorCode::LocationNotFound,
+                                            serde_json::json!({ "operation": "delete", "requestedName": name }),
+                                        ),
+                                        LocationError::PersistFailed(_) => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "delete" }),
+                                        ),
+                                        _ => (
+                                            ErrorCode::InternalError,
+                                            serde_json::json!({ "operation": "delete" }),
+                                        ),
+                                    };
+                                    let err_envelope = AgentMessage::error(
+                                        code,
+                                        &err.to_string(),
+                                        Some(&envelope_clone.id),
+                                        Some(details),
+                                    )
+                                    .to_message();
+                                    if let Err(e) = webrtc_link_clone
+                                        .lock()
+                                        .await
+                                        .send_data_channel_message(&err_envelope)
+                                        .await
+                                    {
+                                        error!("Failed to send location delete error: {}", e);
+                                    }
                                 }
                             }
                         }
