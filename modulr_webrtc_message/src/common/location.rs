@@ -1,4 +1,29 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocationValidationError {
+    NameEmpty,
+    NameWhitespace(String),
+}
+
+impl fmt::Display for LocationValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocationValidationError::NameEmpty => {
+                write!(f, "location name must not be empty")
+            }
+            LocationValidationError::NameWhitespace(name) => {
+                write!(
+                    f,
+                    "location name '{}' must not have leading or trailing whitespace",
+                    name
+                )
+            }
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Position {
@@ -29,9 +54,12 @@ pub struct Location {
 }
 
 impl Location {
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), LocationValidationError> {
         if self.name.is_empty() {
-            return Err("location name must not be empty");
+            return Err(LocationValidationError::NameEmpty);
+        }
+        if self.name != self.name.trim() {
+            return Err(LocationValidationError::NameWhitespace(self.name.clone()));
         }
         Ok(())
     }
@@ -101,6 +129,26 @@ mod tests {
             orientation: None,
             metadata: None,
         };
-        assert!(loc.validate().is_err());
+        assert_eq!(loc.validate(), Err(LocationValidationError::NameEmpty));
+    }
+
+    #[test]
+    fn test_validate_fails_for_whitespace_name() {
+        let loc = Location {
+            name: " Dock A ".to_string(),
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+                z: None,
+            },
+            orientation: None,
+            metadata: None,
+        };
+        assert_eq!(
+            loc.validate(),
+            Err(LocationValidationError::NameWhitespace(
+                " Dock A ".to_string()
+            ))
+        );
     }
 }

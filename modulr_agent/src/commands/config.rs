@@ -10,6 +10,7 @@ pub use modulr_agent_common::ImageFormat;
 
 #[derive(Debug)]
 pub enum LocationError {
+    #[allow(dead_code)]
     NameInvalid(String),
     AlreadyExists(String),
     NotFound(String),
@@ -145,9 +146,6 @@ pub fn create_location(
     location: Location,
     ctx: &ConfigContext,
 ) -> std::result::Result<(), LocationError> {
-    if location.name != location.name.trim() {
-        return Err(LocationError::NameInvalid(location.name));
-    }
     if locations.iter().any(|l| l.name == location.name) {
         return Err(LocationError::AlreadyExists(location.name));
     }
@@ -160,13 +158,10 @@ pub fn create_location(
 }
 
 pub fn update_location(
-    locations: &mut Vec<Location>,
+    locations: &mut [Location],
     location: Location,
     ctx: &ConfigContext,
 ) -> std::result::Result<(), LocationError> {
-    if location.name != location.name.trim() {
-        return Err(LocationError::NameInvalid(location.name));
-    }
     let pos = locations
         .iter()
         .position(|l| l.name == location.name)

@@ -188,6 +188,10 @@ impl AgentMessage {
                 ErrorCode::InvalidMessage,
                 format!("Envelope validation failed: {reason}"),
             ),
+            MessageEnvelopeError::LocationValidation { reason } => (
+                ErrorCode::LocationNameInvalid,
+                format!("Location validation failed: {reason}"),
+            ),
         };
         AgentMessage::error(code, &message, correlation_id, None)
     }
@@ -372,7 +376,7 @@ impl AgentMessage {
                 })?;
                 location
                     .validate()
-                    .map_err(|e| MessageEnvelopeError::JsonParse {
+                    .map_err(|e| MessageEnvelopeError::LocationValidation {
                         reason: e.to_string(),
                     })?;
                 if msg.message_type == "agent.location.create" {
