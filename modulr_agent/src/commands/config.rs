@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use std::fmt;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
@@ -20,7 +20,11 @@ impl fmt::Display for LocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LocationError::NameInvalid(name) => {
-                write!(f, "location name '{}' must not have leading or trailing whitespace", name)
+                write!(
+                    f,
+                    "location name '{}' must not have leading or trailing whitespace",
+                    name
+                )
             }
             LocationError::AlreadyExists(name) => {
                 write!(f, "location '{}' already exists", name)
