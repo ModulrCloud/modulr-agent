@@ -30,10 +30,15 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use ed25519_dalek::{Signer, SigningKey};
+
 use modulr_webrtc_message::{
     AgentErrorCode, AgentMessage, AnswerPayload, ConnectedPayload, DisconnectedPayload,
     DisconnectionReason, IceCandidatePayload, IceConnectionState, MessageEnvelope, PingPayload,
-    RegisterPayload, SignalingErrorCode, SignalingMessage, ToMessage,
+    PkiResponsePayload, RegisterPayload, SignalingErrorCode, SignalingErrorPayload,
+    SignalingMessage, ToMessage,
 };
 
 type MaybeWebSocketWriter =
@@ -174,10 +179,13 @@ pub struct WebRtcLink {
 
     // Timing for frame rate calculation
     last_frame_time: Arc<Mutex<Option<Instant>>>,
+
+    // ED25519 signing key for PKI challenge-response
+    signing_key: Arc<SigningKey>,
 }
 
 impl WebRtcLink {
-    pub fn new(id: &str, url: &str, allow_skip_cert_check: bool) -> Self {
+    pub fn new(id: &str, url: &str, allow_skip_cert_check: bool, signing_key: SigningKey) -> Self {
         Self {
             status: Arc::new(Mutex::new(WebRtcLinkStatus::Disconnected)),
             local_id: id.to_string(),
@@ -193,6 +201,7 @@ impl WebRtcLink {
             data_channel: Arc::new(Mutex::new(None)),
             remote_id: Arc::new(Mutex::new(None)),
             last_frame_time: Arc::new(Mutex::new(None)),
+            signing_key: Arc::new(signing_key),
         }
     }
 
@@ -588,6 +597,7 @@ impl WebRtcLink {
         let peer_connection_clone = Arc::clone(&self.peer_connection);
         let remote_desc_set_clone = Arc::clone(&self.remote_desc_set);
         let pending_remote_candidates_clone = Arc::clone(&self.pending_remote_candidates);
+        let signing_key_clone = Arc::clone(&self.signing_key);
         let robot_id = self.local_id.clone();
 
         log::info!("Starting listen loop for robot_id={}", robot_id);
@@ -732,6 +742,7 @@ impl WebRtcLink {
                                     pc.add_ice_candidate(candidate)
                                         .await
                                         .map_err(|_| WebRtcLinkError::AddIceCandidateFailed)?;
+                                    log::info!("Done adding remote ICE candidate");
                                 } else {
                                     log::error!("PeerConnection is None in candidate handler");
                                 }
@@ -835,6 +846,45 @@ impl WebRtcLink {
                             SignalingMessage::Register(_) => {
                                 log::warn!("Unexpected register message received: {:?}", msg);
                             }
+
+                            SignalingMessage::PkiChallenge(challenge) => {
+                                log::info!("Received PKI challenge, signing response");
+                                let challenge_bytes = match STANDARD.decode(&challenge.challenge) {
+                                    Ok(bytes) => bytes,
+                                    Err(e) => {
+                                        log::error!(
+                                            "Failed to decode PKI challenge as base64: {}",
+                                            e
+                                        );
+                                        let err_msg =
+                                            SignalingMessage::Error(SignalingErrorPayload {
+                                                code: SignalingErrorCode::InvalidPayload,
+                                                message: format!(
+                                                    "PKI challenge is not valid base64: {e}"
+                                                ),
+                                                details: None,
+                                            });
+                                        send_signaling_message(&write_clone, err_msg).await;
+                                        continue;
+                                    }
+                                };
+                                let signature = signing_key_clone.sign(&challenge_bytes);
+                                let signature_b64 = STANDARD.encode(signature.to_bytes());
+
+                                let response = SignalingMessage::PkiResponse(PkiResponsePayload {
+                                    correlation_id: envelope.id.clone(),
+                                    signature: signature_b64,
+                                });
+                                send_signaling_message(&write_clone, response).await;
+                            }
+
+                            SignalingMessage::PkiResponse(_) => {
+                                log::warn!("Unexpected PKI response received: {:?}", msg);
+                            }
+
+                            SignalingMessage::PkiVerified(_) => {
+                                log::info!("PKI has been successfully verified: {:?}", msg);
+                            }
                         }
                     }
                     other => {
@@ -858,7 +908,9 @@ async fn send_signaling_message(ws_write: &MaybeWebSocketWriter, msg: SignalingM
                     .await
                 {
                     log::error!("Failed to send signaling message: {e}");
+                    return;
                 }
+                log::debug!("Sent signaling message: {msg:?}");
             }
             Err(e) => log::error!("Failed to encode signaling message: {e}"),
         }

@@ -1,5 +1,5 @@
-pub const PROTOCOL_VERSION: &str = "0.0";
-pub const SUPPORTED_VERSIONS: &[&str] = &["0.0"];
+pub const PROTOCOL_VERSION: &str = "0.3";
+pub const SUPPORTED_VERSIONS: &[&str] = &["0.0", "0.3"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CapabilitiesErrorCode {
