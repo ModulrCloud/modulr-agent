@@ -1,4 +1,3 @@
-use std::fmt;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -8,36 +7,17 @@ use serde::{Deserialize, Serialize};
 
 pub use modulr_agent_common::ImageFormat;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LocationError {
     #[allow(dead_code)]
+    #[error("location name '{0}' must not have leading or trailing whitespace")]
     NameInvalid(String),
+    #[error("location '{0}' already exists")]
     AlreadyExists(String),
+    #[error("location '{0}' not found")]
     NotFound(String),
-    PersistFailed(anyhow::Error),
-}
-
-impl fmt::Display for LocationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LocationError::NameInvalid(name) => {
-                write!(
-                    f,
-                    "location name '{}' must not have leading or trailing whitespace",
-                    name
-                )
-            }
-            LocationError::AlreadyExists(name) => {
-                write!(f, "location '{}' already exists", name)
-            }
-            LocationError::NotFound(name) => {
-                write!(f, "location '{}' not found", name)
-            }
-            LocationError::PersistFailed(e) => {
-                write!(f, "failed to persist location: {}", e)
-            }
-        }
-    }
+    #[error("failed to persist location: {0}")]
+    PersistFailed(#[from] anyhow::Error),
 }
 
 pub struct ConfigContext {
