@@ -7,3 +7,6 @@ members = [
     "modulr_zenoh_interface",
 ]
 resolver = "2"
+
+[profile.release]
+strip = true

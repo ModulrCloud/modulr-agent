@@ -238,7 +238,7 @@ jobs:
         run: chmod +x target/${{ matrix.target }}/release/modulr_agent
 
       - name: Build .deb package
-        run: cargo deb -p modulr_agent --no-build --target ${{ matrix.target }}
+        run: cargo deb -p modulr_agent --no-build --no-strip --target ${{ matrix.target }}
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
