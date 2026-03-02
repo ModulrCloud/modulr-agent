@@ -20,12 +20,14 @@ Download the `.deb` for your architecture from [GitHub Releases](https://github.
 sudo dpkg -i modulr-agent_*.deb && sudo apt-get install -f
 
 # Run initial setup
-sudo mkdir -p /etc/modulr_agent
 sudo modulr_agent initial-setup \
   --config-override /etc/modulr_agent/config.json \
   --robot-id YOUR_ROBOT_ID \
   --signaling-url wss://your-signaling-server:8765 \
   --video-source ros
+
+# Fix ownership so the modulr service user can read the config and keys
+sudo chown -R modulr:modulr /etc/modulr_agent
 
 # Enable and start the systemd service
 sudo systemctl enable --now modulr-agent
@@ -41,7 +43,9 @@ sudo systemctl status modulr-agent
 docker pull ghcr.io/modulrcloud/modulr-agent:latest
 
 # Run initial setup to create a config file
+mkdir -p config
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/config:/etc/modulr_agent \
   ghcr.io/modulrcloud/modulr-agent:latest \
   initial-setup \
@@ -53,13 +57,48 @@ docker run --rm \
 # Run with camera device access
 docker run -d \
   --name modulr-agent \
+  --user $(id -u):$(id -g) \
   --network host \
   --device /dev/video0:/dev/video0 \
-  -v $(pwd)/config:/etc/modulr_agent:ro \
+  -v $(pwd)/config:/etc/modulr_agent \
   ghcr.io/modulrcloud/modulr-agent:latest
 ```
 
 > **Note**: `--network host` is recommended for WebRTC and ROS connectivity. Use `--device` to pass through cameras or serial ports. For broad hardware access on a dedicated robot, `--privileged` can be used instead of individual `--device` flags.
+
+### Option 2b: Docker (NVIDIA Jetson)
+
+A Jetson-specific image is available with NVIDIA GStreamer plugins for hardware-accelerated H.264 encoding. Requires JetPack 6.x (Orin platform) and the NVIDIA Container Runtime.
+
+```bash
+# Pull the Jetson image (arm64 only)
+docker pull ghcr.io/modulrcloud/modulr-agent:jetson-latest
+
+# Run initial setup
+mkdir -p config
+docker run --rm \
+  --runtime nvidia \
+  --user $(id -u):$(id -g) \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:jetson-latest \
+  initial-setup \
+    --config-override /etc/modulr_agent/config.json \
+    --robot-id YOUR_ROBOT_ID \
+    --signaling-url wss://your-signaling-server:8765 \
+    --video-source ros
+
+# Run with hardware acceleration and camera access
+docker run -d \
+  --name modulr-agent \
+  --runtime nvidia \
+  --user $(id -u):$(id -g) \
+  --network host \
+  --device /dev/video0:/dev/video0 \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:jetson-latest
+```
+
+> **Note**: The `--runtime nvidia` flag is required to access NVIDIA hardware acceleration. You can set it as the default runtime by adding `"default-runtime": "nvidia"` to `/etc/docker/daemon.json`. To target a specific JetPack version, use `--build-arg L4T_VERSION=r36.x.x` when building from source with `Dockerfile.jetson`.
 
 ### Option 3: Build from Source
 

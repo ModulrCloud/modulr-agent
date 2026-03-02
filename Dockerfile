@@ -4,7 +4,7 @@
 # Multi-arch: binaries are placed in docker-context/linux/{amd64,arm64,arm/v7}/
 # by CI before building. docker buildx sets TARGETPLATFORM automatically.
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG TARGETPLATFORM
 
@@ -22,7 +22,6 @@ RUN apt-get update && \
         gstreamer1.0-libav \
         libgstrtspserver-1.0-0 \
         libges-1.0-0 \
-        libssl3 \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 

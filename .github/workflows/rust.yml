@@ -318,10 +318,67 @@ jobs:
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime
 
+  build-jetson-image:
+    name: Build Jetson Docker Image
+    runs-on: ubuntu-latest
+    needs: cross-build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download aarch64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: modulr-agent-aarch64-unknown-linux-gnu
+          path: docker-context/linux/arm64/
+
+      - name: Make binary executable
+        run: chmod +x docker-context/linux/arm64/modulr_agent
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/modulrcloud/modulr-agent
+          tags: |
+            type=ref,event=branch,prefix=jetson-
+            type=semver,pattern={{version}},prefix=jetson-
+            type=semver,pattern={{major}}.{{minor}},prefix=jetson-
+            type=sha,prefix=jetson-
+
+      - name: Build and push Jetson image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.jetson
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=jetson
+          cache-to: type=gha,mode=max,scope=jetson
+
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [package-deb, build-runtime-images]
+    needs: [package-deb, build-runtime-images, build-jetson-image]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write

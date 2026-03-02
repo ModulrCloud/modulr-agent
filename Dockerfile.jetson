@@ -1,0 +1,31 @@
+# Jetson runtime image for modulr_agent
+# Includes NVIDIA GStreamer plugins for hardware-accelerated H.264 encoding.
+# This takes pre-compiled binaries from CI — it does NOT compile from source.
+#
+# Requires: NVIDIA Container Runtime on host (--runtime nvidia)
+# Compatible with: JetPack 6.x (Orin platform, L4T R36.x)
+#
+# Override the L4T version to match your JetPack installation:
+#   docker build --build-arg L4T_VERSION=r36.4.0 -f Dockerfile.jetson .
+
+ARG L4T_VERSION=r36.3.0
+FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION}
+
+LABEL org.opencontainers.image.source="https://github.com/ModulrCloud/modulr-agent"
+LABEL org.opencontainers.image.description="Modulr Robot Agent (NVIDIA Jetson)"
+LABEL org.opencontainers.image.licenses="MIT"
+
+RUN groupadd -r modulr && useradd -r -g modulr -G video -d /home/modulr -m modulr
+
+RUN mkdir -p /etc/modulr_agent && \
+    chown modulr:modulr /etc/modulr_agent
+
+COPY docker-context/linux/arm64/modulr_agent /usr/bin/modulr_agent
+RUN chmod +x /usr/bin/modulr_agent
+
+USER modulr
+
+VOLUME ["/etc/modulr_agent"]
+
+ENTRYPOINT ["/usr/bin/modulr_agent"]
+CMD ["start", "--config-override", "/etc/modulr_agent/config.json"]

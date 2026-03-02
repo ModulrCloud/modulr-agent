@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create modulr system user and group if they don't exist
+        if ! getent group modulr >/dev/null 2>&1; then
+            groupadd --system modulr
+        fi
+        if ! getent passwd modulr >/dev/null 2>&1; then
+            useradd --system --gid modulr --no-create-home --shell /usr/sbin/nologin modulr
+        fi
+
+        # Ensure config directory exists with correct ownership
+        mkdir -p /etc/modulr_agent
+        chown modulr:modulr /etc/modulr_agent
+
+        # Reload systemd to pick up the new service file
+        systemctl daemon-reload || true
+        ;;
+esac
+
+#DEBHELPER#
