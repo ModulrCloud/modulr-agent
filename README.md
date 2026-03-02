@@ -17,9 +17,9 @@ Add the Modulr APT repository for automatic installs and updates:
 
 ```bash
 # Add the repository signing key and source
-curl -fsSL https://YOUR_CLOUDFRONT_URL/gpg.key | \
+curl -fsSL https://d2zsrx00cso14v.cloudfront.net/gpg.key | \
   sudo gpg --dearmor -o /etc/apt/keyrings/modulr.gpg
-echo "deb [signed-by=/etc/apt/keyrings/modulr.gpg] https://YOUR_CLOUDFRONT_URL stable main" | \
+echo "deb [signed-by=/etc/apt/keyrings/modulr.gpg] https://d2zsrx00cso14v.cloudfront.net stable main" | \
   sudo tee /etc/apt/sources.list.d/modulr.list
 
 # Install
