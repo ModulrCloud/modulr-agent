@@ -1,0 +1,7 @@
+Origin: Modulr
+Label: Modulr
+Codename: stable
+Architectures: amd64 arm64 armhf
+Components: main
+Description: Modulr Robot Agent packages
+SignWith: yes
