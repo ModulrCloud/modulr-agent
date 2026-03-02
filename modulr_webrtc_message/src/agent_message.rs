@@ -38,12 +38,22 @@ pub type MovementCommand = MovementPayload;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LocationDeletePayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LocationListPayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LocationResponsePayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
     pub operation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locations: Option<Vec<Location>>,
@@ -70,7 +80,7 @@ pub enum AgentMessage {
     Error(ErrorPayload),
     LocationCreate(Location),
     LocationDelete(LocationDeletePayload),
-    LocationList,
+    LocationList(LocationListPayload),
     LocationResponse(LocationResponsePayload),
     LocationUpdate(Location),
     Movement(MovementPayload),
@@ -85,7 +95,7 @@ impl MessageFields for AgentMessage {
             AgentMessage::Error(_) => "agent.error",
             AgentMessage::LocationCreate(_) => "agent.location.create",
             AgentMessage::LocationDelete(_) => "agent.location.delete",
-            AgentMessage::LocationList => "agent.location.list",
+            AgentMessage::LocationList(_) => "agent.location.list",
             AgentMessage::LocationResponse(_) => "agent.location.response",
             AgentMessage::LocationUpdate(_) => "agent.location.update",
             AgentMessage::Movement(_) => "agent.movement",
@@ -99,12 +109,13 @@ impl MessageFields for AgentMessage {
         match self {
             AgentMessage::Error(e) => e.correlation_id.clone(),
             AgentMessage::Ping(p) | AgentMessage::Pong(p) => Some(p.correlation_id.clone()),
+            AgentMessage::LocationCreate(l) | AgentMessage::LocationUpdate(l) => {
+                l.correlation_id.clone()
+            }
+            AgentMessage::LocationDelete(d) => d.correlation_id.clone(),
+            AgentMessage::LocationList(p) => p.correlation_id.clone(),
+            AgentMessage::LocationResponse(r) => r.correlation_id.clone(),
             AgentMessage::Capabilities(_) => None,
-            AgentMessage::LocationCreate(_) => None,
-            AgentMessage::LocationDelete(_) => None,
-            AgentMessage::LocationList => None,
-            AgentMessage::LocationResponse(_) => None,
-            AgentMessage::LocationUpdate(_) => None,
             AgentMessage::Movement(_) => None,
         }
     }
@@ -115,7 +126,7 @@ impl MessageFields for AgentMessage {
             AgentMessage::Error(e) => serde_json::to_value(e).ok(),
             AgentMessage::LocationCreate(l) => serde_json::to_value(l).ok(),
             AgentMessage::LocationDelete(l) => serde_json::to_value(l).ok(),
-            AgentMessage::LocationList => None,
+            AgentMessage::LocationList(_) => None,
             AgentMessage::LocationResponse(r) => serde_json::to_value(r).ok(),
             AgentMessage::LocationUpdate(l) => serde_json::to_value(l).ok(),
             AgentMessage::Movement(cmd) => serde_json::to_value(cmd).ok(),
@@ -369,11 +380,13 @@ impl AgentMessage {
                     .ok_or(MessageEnvelopeError::MissingFields {
                         fields: vec!["payload".to_string()],
                     })?;
-                let location: Location = serde_json::from_value(payload.clone()).map_err(|e| {
-                    MessageEnvelopeError::JsonParse {
-                        reason: e.to_string(),
-                    }
-                })?;
+                let mut location: Location =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                location.correlation_id = Some(msg.id.clone());
                 location
                     .validate()
                     .map_err(|e| MessageEnvelopeError::LocationValidation {
@@ -386,7 +399,9 @@ impl AgentMessage {
                 }
             }
 
-            "agent.location.list" => Ok(AgentMessage::LocationList),
+            "agent.location.list" => Ok(AgentMessage::LocationList(LocationListPayload {
+                correlation_id: Some(msg.id.clone()),
+            })),
 
             "agent.location.delete" => {
                 let payload = msg
@@ -395,12 +410,11 @@ impl AgentMessage {
                     .ok_or(MessageEnvelopeError::MissingFields {
                         fields: vec!["payload".to_string()],
                     })?;
-                let del: LocationDeletePayload =
-                    serde_json::from_value(payload.clone()).map_err(|e| {
-                        MessageEnvelopeError::JsonParse {
-                            reason: e.to_string(),
-                        }
+                let mut del: LocationDeletePayload = serde_json::from_value(payload.clone())
+                    .map_err(|e| MessageEnvelopeError::JsonParse {
+                        reason: e.to_string(),
                     })?;
+                del.correlation_id = Some(msg.id.clone());
                 Ok(AgentMessage::LocationDelete(del))
             }
 
@@ -865,7 +879,7 @@ mod tests {
     fn test_parse_location_list() {
         let envelope = make_envelope("agent.location.list", None, None);
         let msg = AgentMessage::from_message(&envelope).unwrap();
-        assert!(matches!(msg, AgentMessage::LocationList));
+        assert!(matches!(msg, AgentMessage::LocationList(_)));
     }
 
     #[test]
@@ -1000,6 +1014,6 @@ mod tests {
         // Matches list.example.json which sends payload: {}
         let envelope = make_envelope("agent.location.list", None, Some(json!({})));
         let msg = AgentMessage::from_message(&envelope).unwrap();
-        assert!(matches!(msg, AgentMessage::LocationList));
+        assert!(matches!(msg, AgentMessage::LocationList(_)));
     }
 }

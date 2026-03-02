@@ -3,8 +3,8 @@ pub mod common;
 mod signalling_message;
 
 pub use agent_message::{
-    AgentMessage, ErrorCode as AgentErrorCode, LocationDeletePayload, LocationResponsePayload,
-    MovementCommand, PingPayload,
+    AgentMessage, ErrorCode as AgentErrorCode, LocationDeletePayload, LocationListPayload,
+    LocationResponsePayload, MovementCommand, PingPayload,
 };
 pub use common::{
     Location, MessageEnvelope, Orientation, PROTOCOL_VERSION, Position, SUPPORTED_VERSIONS,

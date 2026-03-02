@@ -19,8 +19,7 @@ use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
 use modulr_webrtc_message::{
-    AgentErrorCode as ErrorCode, AgentMessage, Location, LocationResponsePayload, MessageEnvelope,
-    ToMessage,
+    AgentErrorCode as ErrorCode, AgentMessage, Location, LocationResponsePayload, ToMessage,
 };
 
 const ROS1: bool = false;
@@ -160,13 +159,12 @@ pub async fn start(args: StartArgs) -> Result<()> {
         .lock()
         .await
         .on_webrtc_message(Box::new(
-            move |msg: &AgentMessage, envelope: &MessageEnvelope| {
+            move |msg: &AgentMessage| {
                 let bridge_clone = Arc::clone(&bridge_clone);
                 let locations_clone = Arc::clone(&locations_clone);
                 let webrtc_link_clone = Arc::clone(&webrtc_link_clone_for_msg);
                 let config_ctx_clone = Arc::clone(&config_ctx);
                 let msg_clone = msg.clone();
-                let envelope_clone = envelope.clone();
                 Box::pin(async move {
                     match msg_clone {
                         AgentMessage::Movement(cmd) => {
@@ -176,15 +174,15 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                 error!("Failed to post movement command: {}", e);
                             }
                         }
-                        AgentMessage::LocationList => {
+                        AgentMessage::LocationList(ref list_payload) => {
                             let locs = locations_clone.lock().await.clone();
-                            let mut response_envelope =
+                            let response_envelope =
                                 AgentMessage::LocationResponse(LocationResponsePayload {
+                                    correlation_id: list_payload.correlation_id.clone(),
                                     operation: "list".to_string(),
                                     locations: Some(locs),
                                 })
                                 .to_message();
-                            response_envelope.correlation_id = Some(envelope_clone.id.clone());
                             if let Err(e) = webrtc_link_clone
                                 .lock()
                                 .await
@@ -195,20 +193,20 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationCreate(location) => {
+                            let corr_id = location.correlation_id.clone();
                             let create_result = {
                                 let mut locs = locations_clone.lock().await;
                                 create_location(&mut locs, location, &config_ctx_clone)
                             };
                             match create_result {
                                 Ok(()) => {
-                                    let mut response_envelope =
+                                    let response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
+                                            correlation_id: corr_id.clone(),
                                             operation: "create".to_string(),
                                             locations: None,
                                         })
                                         .to_message();
-                                    response_envelope.correlation_id =
-                                        Some(envelope_clone.id.clone());
                                     if let Err(e) = webrtc_link_clone
                                         .lock()
                                         .await
@@ -240,7 +238,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     let err_envelope = AgentMessage::error(
                                         code,
                                         &err.to_string(),
-                                        Some(&envelope_clone.id),
+                                        corr_id.as_deref(),
                                         Some(details),
                                     )
                                     .to_message();
@@ -256,20 +254,20 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationUpdate(location) => {
+                            let corr_id = location.correlation_id.clone();
                             let update_result = {
                                 let mut locs = locations_clone.lock().await;
                                 update_location(&mut locs, location, &config_ctx_clone)
                             };
                             match update_result {
                                 Ok(()) => {
-                                    let mut response_envelope =
+                                    let response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
+                                            correlation_id: corr_id.clone(),
                                             operation: "update".to_string(),
                                             locations: None,
                                         })
                                         .to_message();
-                                    response_envelope.correlation_id =
-                                        Some(envelope_clone.id.clone());
                                     if let Err(e) = webrtc_link_clone
                                         .lock()
                                         .await
@@ -301,7 +299,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     let err_envelope = AgentMessage::error(
                                         code,
                                         &err.to_string(),
-                                        Some(&envelope_clone.id),
+                                        corr_id.as_deref(),
                                         Some(details),
                                     )
                                     .to_message();
@@ -317,20 +315,20 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationDelete(payload) => {
+                            let corr_id = payload.correlation_id.clone();
                             let delete_result = {
                                 let mut locs = locations_clone.lock().await;
                                 delete_location(&mut locs, &payload.name, &config_ctx_clone)
                             };
                             match delete_result {
                                 Ok(()) => {
-                                    let mut response_envelope =
+                                    let response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
+                                            correlation_id: corr_id.clone(),
                                             operation: "delete".to_string(),
                                             locations: None,
                                         })
                                         .to_message();
-                                    response_envelope.correlation_id =
-                                        Some(envelope_clone.id.clone());
                                     if let Err(e) = webrtc_link_clone
                                         .lock()
                                         .await
@@ -358,7 +356,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     let err_envelope = AgentMessage::error(
                                         code,
                                         &err.to_string(),
-                                        Some(&envelope_clone.id),
+                                        corr_id.as_deref(),
                                         Some(details),
                                     )
                                     .to_message();

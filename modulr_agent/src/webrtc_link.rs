@@ -42,9 +42,7 @@ type MaybeWebSocketReader =
     Arc<Mutex<Option<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>>;
 
 pub type OnWebRtcMessageHdlrFn = Box<
-    dyn (FnMut(&AgentMessage, &MessageEnvelope) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
-        + Send
-        + Sync,
+    dyn (FnMut(&AgentMessage) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>) + Send + Sync,
 >;
 
 fn insecure_verifier() -> Arc<dyn ServerCertVerifier> {
@@ -494,11 +492,11 @@ impl WebRtcLink {
                         AgentMessage::Movement(_)
                         | AgentMessage::LocationCreate(_)
                         | AgentMessage::LocationDelete(_)
-                        | AgentMessage::LocationList
+                        | AgentMessage::LocationList(_)
                         | AgentMessage::LocationResponse(_)
                         | AgentMessage::LocationUpdate(_) => {
                             for listener in listeners_clone.lock().await.iter_mut() {
-                                tokio::spawn(listener(&agent_message, &envelope));
+                                tokio::spawn(listener(&agent_message));
                             }
                         }
                     }

@@ -45,6 +45,8 @@ pub struct Orientation {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Location {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
     pub name: String,
     pub position: Position,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,6 +75,7 @@ mod tests {
     #[test]
     fn test_location_serialises_optional_fields_omitted() {
         let loc = Location {
+            correlation_id: None,
             name: "Dock A".to_string(),
             position: Position {
                 x: 1.0,
@@ -105,6 +108,7 @@ mod tests {
     #[test]
     fn test_validate_passes_for_valid_location() {
         let loc = Location {
+            correlation_id: None,
             name: "Home".to_string(),
             position: Position {
                 x: 0.0,
@@ -120,6 +124,7 @@ mod tests {
     #[test]
     fn test_validate_fails_for_empty_name() {
         let loc = Location {
+            correlation_id: None,
             name: "".to_string(),
             position: Position {
                 x: 0.0,
@@ -135,6 +140,7 @@ mod tests {
     #[test]
     fn test_validate_fails_for_whitespace_name() {
         let loc = Location {
+            correlation_id: None,
             name: " Dock A ".to_string(),
             position: Position {
                 x: 0.0,
