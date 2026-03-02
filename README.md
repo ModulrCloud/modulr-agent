@@ -9,6 +9,60 @@ This is a Cargo workspace containing two crates:
 - **modulr_agent** - Main binary application for robot control and video streaming
 - **modulr_zenoh_interface** - Library crate for Zenoh-based video transport (optional)
 
+## Installation
+
+### Option 1: Debian Package (Ubuntu/Debian)
+
+Download the `.deb` for your architecture from [GitHub Releases](https://github.com/ModulrCloud/modulr-agent/releases):
+
+```bash
+# Install the package (apt resolves GStreamer dependencies automatically)
+sudo dpkg -i modulr-agent_*.deb && sudo apt-get install -f
+
+# Run initial setup
+sudo mkdir -p /etc/modulr_agent
+sudo modulr_agent initial-setup \
+  --config-override /etc/modulr_agent/config.json \
+  --robot-id YOUR_ROBOT_ID \
+  --signaling-url wss://your-signaling-server:8765 \
+  --video-source ros
+
+# Enable and start the systemd service
+sudo systemctl enable --now modulr-agent
+
+# Check status
+sudo systemctl status modulr-agent
+```
+
+### Option 2: Docker
+
+```bash
+# Pull the image (multi-arch: amd64, arm64, armv7)
+docker pull ghcr.io/modulrcloud/modulr-agent:latest
+
+# Run initial setup to create a config file
+docker run --rm \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:latest \
+  initial-setup \
+    --config-override /etc/modulr_agent/config.json \
+    --robot-id YOUR_ROBOT_ID \
+    --signaling-url wss://your-signaling-server:8765 \
+    --video-source ros
+
+# Run with camera device access
+docker run -d \
+  --name modulr-agent \
+  --network host \
+  --device /dev/video0:/dev/video0 \
+  -v $(pwd)/config:/etc/modulr_agent:ro \
+  ghcr.io/modulrcloud/modulr-agent:latest
+```
+
+> **Note**: `--network host` is recommended for WebRTC and ROS connectivity. Use `--device` to pass through cameras or serial ports. For broad hardware access on a dedicated robot, `--privileged` can be used instead of individual `--device` flags.
+
+### Option 3: Build from Source
+
 ## Cloning the Package
 
 Use the following command to clone the package:

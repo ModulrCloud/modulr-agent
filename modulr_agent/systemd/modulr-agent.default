@@ -1,0 +1,5 @@
+# Modulr Agent environment configuration
+# This file is sourced by the systemd service unit
+
+# Set log level (e.g., modulr_agent=info,warn)
+# RUST_LOG=modulr_agent=info
