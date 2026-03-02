@@ -11,9 +11,31 @@ This is a Cargo workspace containing two crates:
 
 ## Installation
 
-### Option 1: Debian Package (Ubuntu/Debian)
+### Option 1: APT Repository (Recommended)
 
-Download the `.deb` for your architecture from [GitHub Releases](https://github.com/ModulrCloud/modulr-agent/releases):
+Add the Modulr APT repository for automatic installs and updates:
+
+```bash
+# Add the repository signing key and source
+curl -fsSL https://YOUR_CLOUDFRONT_URL/gpg.key | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/modulr.gpg
+echo "deb [signed-by=/etc/apt/keyrings/modulr.gpg] https://YOUR_CLOUDFRONT_URL stable main" | \
+  sudo tee /etc/apt/sources.list.d/modulr.list
+
+# Install
+sudo apt update
+sudo apt install modulr-agent
+```
+
+Future updates are a single command:
+
+```bash
+sudo apt update && sudo apt upgrade
+```
+
+### Option 1b: Debian Package (Manual)
+
+Alternatively, download the `.deb` for your architecture from [GitHub Releases](https://github.com/ModulrCloud/modulr-agent/releases):
 
 ```bash
 # Install the package (apt resolves GStreamer dependencies automatically)
@@ -79,6 +101,7 @@ mkdir -p config
 docker run --rm \
   --runtime nvidia \
   --user $(id -u):$(id -g) \
+  --group-add video \
   -v $(pwd)/config:/etc/modulr_agent \
   ghcr.io/modulrcloud/modulr-agent:jetson-latest \
   initial-setup \
@@ -92,6 +115,7 @@ docker run -d \
   --name modulr-agent \
   --runtime nvidia \
   --user $(id -u):$(id -g) \
+  --group-add video \
   --network host \
   --device /dev/video0:/dev/video0 \
   -v $(pwd)/config:/etc/modulr_agent \
