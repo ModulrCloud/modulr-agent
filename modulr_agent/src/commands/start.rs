@@ -195,10 +195,12 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationCreate(location) => {
-                            let mut locs = locations_clone.lock().await;
-                            match create_location(&mut locs, location, &config_ctx_clone) {
+                            let create_result = {
+                                let mut locs = locations_clone.lock().await;
+                                create_location(&mut locs, location, &config_ctx_clone)
+                            };
+                            match create_result {
                                 Ok(()) => {
-                                    drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
                                             operation: "create".to_string(),
@@ -217,7 +219,6 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     }
                                 }
                                 Err(ref err) => {
-                                    drop(locs);
                                     let (code, details) = match err {
                                         LocationError::NameInvalid(name) => (
                                             ErrorCode::LocationNameInvalid,
@@ -255,10 +256,12 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationUpdate(location) => {
-                            let mut locs = locations_clone.lock().await;
-                            match update_location(&mut locs, location, &config_ctx_clone) {
+                            let update_result = {
+                                let mut locs = locations_clone.lock().await;
+                                update_location(&mut locs, location, &config_ctx_clone)
+                            };
+                            match update_result {
                                 Ok(()) => {
-                                    drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
                                             operation: "update".to_string(),
@@ -277,7 +280,6 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     }
                                 }
                                 Err(ref err) => {
-                                    drop(locs);
                                     let (code, details) = match err {
                                         LocationError::NameInvalid(name) => (
                                             ErrorCode::LocationNameInvalid,
@@ -315,10 +317,12 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                         AgentMessage::LocationDelete(payload) => {
-                            let mut locs = locations_clone.lock().await;
-                            match delete_location(&mut locs, &payload.name, &config_ctx_clone) {
+                            let delete_result = {
+                                let mut locs = locations_clone.lock().await;
+                                delete_location(&mut locs, &payload.name, &config_ctx_clone)
+                            };
+                            match delete_result {
                                 Ok(()) => {
-                                    drop(locs);
                                     let mut response_envelope =
                                         AgentMessage::LocationResponse(LocationResponsePayload {
                                             operation: "delete".to_string(),
@@ -337,7 +341,6 @@ pub async fn start(args: StartArgs) -> Result<()> {
                                     }
                                 }
                                 Err(ref err) => {
-                                    drop(locs);
                                     let (code, details) = match err {
                                         LocationError::NotFound(name) => (
                                             ErrorCode::LocationNotFound,
