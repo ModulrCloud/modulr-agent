@@ -21,6 +21,8 @@ pub enum ErrorCode {
     LocationAlreadyExists,
     LocationStorageFull,
     LocationNameInvalid,
+    NavigationAlreadyActive,
+    NavigationNotActive,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -60,6 +62,38 @@ pub struct LocationResponsePayload {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NavigationStartPayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NavigationCancelPayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum NavigationStatus {
+    Started,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NavigationResponsePayload {
+    #[serde(skip)]
+    pub correlation_id: Option<String>,
+    pub status: NavigationStatus,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CapabilitiesPayload {
     pub versions: Vec<String>,
 }
@@ -84,6 +118,9 @@ pub enum AgentMessage {
     LocationResponse(LocationResponsePayload),
     LocationUpdate(Location),
     Movement(MovementPayload),
+    NavigationCancel(NavigationCancelPayload),
+    NavigationResponse(NavigationResponsePayload),
+    NavigationStart(NavigationStartPayload),
     Ping(PingPayload),
     Pong(PongPayload),
 }
@@ -99,6 +136,9 @@ impl MessageFields for AgentMessage {
             AgentMessage::LocationResponse(_) => "agent.location.response",
             AgentMessage::LocationUpdate(_) => "agent.location.update",
             AgentMessage::Movement(_) => "agent.movement",
+            AgentMessage::NavigationCancel(_) => "agent.navigation.cancel",
+            AgentMessage::NavigationResponse(_) => "agent.navigation.response",
+            AgentMessage::NavigationStart(_) => "agent.navigation.start",
             AgentMessage::Ping(_) => "agent.ping",
             AgentMessage::Pong(_) => "agent.pong",
         }
@@ -117,6 +157,9 @@ impl MessageFields for AgentMessage {
             AgentMessage::LocationResponse(r) => r.correlation_id.clone(),
             AgentMessage::Capabilities(_) => None,
             AgentMessage::Movement(_) => None,
+            AgentMessage::NavigationCancel(p) => p.correlation_id.clone(),
+            AgentMessage::NavigationResponse(p) => p.correlation_id.clone(),
+            AgentMessage::NavigationStart(p) => p.correlation_id.clone(),
         }
     }
 
@@ -130,6 +173,9 @@ impl MessageFields for AgentMessage {
             AgentMessage::LocationResponse(r) => serde_json::to_value(r).ok(),
             AgentMessage::LocationUpdate(l) => serde_json::to_value(l).ok(),
             AgentMessage::Movement(cmd) => serde_json::to_value(cmd).ok(),
+            AgentMessage::NavigationCancel(_) => None,
+            AgentMessage::NavigationResponse(p) => serde_json::to_value(p).ok(),
+            AgentMessage::NavigationStart(p) => serde_json::to_value(p).ok(),
             AgentMessage::Ping(_) => None,
             AgentMessage::Pong(_) => None,
         }
@@ -186,6 +232,20 @@ impl AgentMessage {
     pub fn pong(correlation_id: &str) -> Self {
         AgentMessage::Pong(PongPayload {
             correlation_id: correlation_id.to_string(),
+        })
+    }
+
+    pub fn navigation_response(
+        status: NavigationStatus,
+        name: &str,
+        message: Option<&str>,
+        correlation_id: Option<&str>,
+    ) -> Self {
+        AgentMessage::NavigationResponse(NavigationResponsePayload {
+            correlation_id: correlation_id.map(String::from),
+            status,
+            name: name.to_string(),
+            message: message.map(String::from),
         })
     }
 
@@ -421,6 +481,46 @@ impl AgentMessage {
                         reason: e.to_string(),
                     })?;
                 Ok(AgentMessage::LocationResponse(resp))
+            }
+
+            "agent.navigation.start" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
+                let mut nav_start: NavigationStartPayload =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                nav_start.correlation_id = Some(msg.id.clone());
+                Ok(AgentMessage::NavigationStart(nav_start))
+            }
+
+            "agent.navigation.cancel" => {
+                Ok(AgentMessage::NavigationCancel(NavigationCancelPayload {
+                    correlation_id: Some(msg.id.clone()),
+                }))
+            }
+
+            "agent.navigation.response" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
+                let mut nav_resp: NavigationResponsePayload =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                nav_resp.correlation_id = msg.correlation_id.clone();
+                Ok(AgentMessage::NavigationResponse(nav_resp))
             }
 
             _ => Err(MessageEnvelopeError::UnknownMessageType {
@@ -1006,5 +1106,139 @@ mod tests {
         let envelope = make_envelope("agent.location.list", None, Some(json!({})));
         let msg = AgentMessage::from_message(&envelope).unwrap();
         assert!(matches!(msg, AgentMessage::LocationList(_)));
+    }
+
+    // --- Navigation parsing tests ---
+
+    #[test]
+    fn test_parse_navigation_start() {
+        let envelope = make_envelope(
+            "agent.navigation.start",
+            None,
+            Some(json!({ "name": "Dock A" })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::NavigationStart(p) => {
+                assert_eq!(p.name, "Dock A");
+                assert_eq!(p.correlation_id, Some("test-id".to_string()));
+            }
+            other => panic!("Expected NavigationStart, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_navigation_start_missing_payload_returns_error() {
+        let envelope = make_envelope("agent.navigation.start", None, None);
+        let err = AgentMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::MissingFields { .. }));
+    }
+
+    #[test]
+    fn test_parse_navigation_start_missing_name_returns_error() {
+        let envelope = make_envelope("agent.navigation.start", None, Some(json!({})));
+        let err = AgentMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::JsonParse { .. }));
+    }
+
+    #[test]
+    fn test_parse_navigation_cancel() {
+        let envelope = make_envelope("agent.navigation.cancel", None, Some(json!({})));
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::NavigationCancel(p) => {
+                assert_eq!(p.correlation_id, Some("test-id".to_string()));
+            }
+            other => panic!("Expected NavigationCancel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_navigation_response() {
+        let envelope = make_envelope(
+            "agent.navigation.response",
+            Some("req-abc"),
+            Some(json!({ "status": "started", "name": "Dock A" })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::NavigationResponse(p) => {
+                assert_eq!(p.status, NavigationStatus::Started);
+                assert_eq!(p.name, "Dock A");
+                assert_eq!(p.correlation_id, Some("req-abc".to_string()));
+                assert!(p.message.is_none());
+            }
+            other => panic!("Expected NavigationResponse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_navigation_response_with_message() {
+        let envelope = make_envelope(
+            "agent.navigation.response",
+            Some("req-abc"),
+            Some(json!({ "status": "failed", "name": "Dock A", "message": "path blocked" })),
+        );
+        let msg = AgentMessage::from_message(&envelope).unwrap();
+        match msg {
+            AgentMessage::NavigationResponse(p) => {
+                assert_eq!(p.status, NavigationStatus::Failed);
+                assert_eq!(p.message, Some("path blocked".to_string()));
+            }
+            other => panic!("Expected NavigationResponse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_navigation_status_serialises_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&NavigationStatus::Started).unwrap(),
+            "\"started\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NavigationStatus::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NavigationStatus::Completed).unwrap(),
+            "\"completed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NavigationStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+    }
+
+    #[test]
+    fn test_navigation_error_codes_serialise() {
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::NavigationAlreadyActive).unwrap(),
+            "\"NAVIGATION_ALREADY_ACTIVE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::NavigationNotActive).unwrap(),
+            "\"NAVIGATION_NOT_ACTIVE\""
+        );
+    }
+
+    #[test]
+    fn test_navigation_response_round_trip() {
+        let original = AgentMessage::navigation_response(
+            NavigationStatus::Started,
+            "Dock A",
+            None,
+            Some("corr-nav-1"),
+        );
+        let json_str = original.to_message().to_string().unwrap();
+        let envelope = MessageEnvelope::from_str(&json_str).unwrap();
+        let parsed = AgentMessage::from_message(&envelope).unwrap();
+        match parsed {
+            AgentMessage::NavigationResponse(p) => {
+                assert_eq!(p.status, NavigationStatus::Started);
+                assert_eq!(p.name, "Dock A");
+                assert_eq!(p.correlation_id, Some("corr-nav-1".to_string()));
+            }
+            other => panic!("Expected NavigationResponse, got {:?}", other),
+        }
     }
 }

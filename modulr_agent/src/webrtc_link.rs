@@ -494,7 +494,10 @@ impl WebRtcLink {
                         | AgentMessage::LocationDelete(_)
                         | AgentMessage::LocationList(_)
                         | AgentMessage::LocationResponse(_)
-                        | AgentMessage::LocationUpdate(_) => {
+                        | AgentMessage::LocationUpdate(_)
+                        | AgentMessage::NavigationStart(_)
+                        | AgentMessage::NavigationCancel(_)
+                        | AgentMessage::NavigationResponse(_) => {
                             for listener in listeners_clone.lock().await.iter_mut() {
                                 tokio::spawn(listener(&agent_message));
                             }

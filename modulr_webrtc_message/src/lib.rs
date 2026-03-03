@@ -4,7 +4,8 @@ mod signalling_message;
 
 pub use agent_message::{
     AgentMessage, ErrorCode as AgentErrorCode, LocationDeletePayload, LocationListPayload,
-    LocationResponsePayload, MovementCommand, PingPayload,
+    LocationResponsePayload, MovementCommand, NavigationCancelPayload, NavigationResponsePayload,
+    NavigationStartPayload, NavigationStatus, PingPayload,
 };
 pub use common::{
     Location, LocationValidationError, MessageEnvelope, Orientation, PROTOCOL_VERSION, Position,

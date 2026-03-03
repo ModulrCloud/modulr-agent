@@ -8,7 +8,8 @@ use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
 use crate::commands::config::{
-    ImageFormat, VideoSource, create_location, delete_location, read_config, update_location,
+    ImageFormat, VideoSource, cancel_navigation, create_location, delete_location, read_config,
+    start_navigation, update_location,
 };
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
@@ -18,7 +19,7 @@ use crate::video_pipeline::VideoPipelineError;
 use crate::webrtc_link::WebRtcLink;
 use crate::webrtc_link::WebRtcLinkError;
 use modulr_webrtc_message::{
-    AgentMessage, Location, LocationResponsePayload, MessageEnvelope, ToMessage,
+    AgentMessage, Location, LocationResponsePayload, MessageEnvelope, NavigationStatus, ToMessage,
 };
 
 const ROS1: bool = false;
@@ -139,6 +140,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
     let video_source = config.robot.video_source.clone();
     let locations: Arc<Mutex<Vec<Location>>> =
         Arc::new(Mutex::new(std::mem::take(&mut config.locations)));
+    let navigation_target: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let config = Arc::new(config);
 
     let webrtc_link = Arc::new(Mutex::new(WebRtcLink::new(
@@ -159,6 +161,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
     // Browser -> WebRTC -> ROS
     let bridge_clone = Arc::clone(&bridge);
     let locations_clone = Arc::clone(&locations);
+    let navigation_target_clone = Arc::clone(&navigation_target);
     let webrtc_link_clone_for_msg = Arc::clone(&webrtc_link);
     let config_clone = Arc::clone(&config);
     webrtc_link
@@ -167,6 +170,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         .on_webrtc_message(Box::new(move |msg: &AgentMessage| {
             let bridge_clone = Arc::clone(&bridge_clone);
             let locations_clone = Arc::clone(&locations_clone);
+            let navigation_target_clone = Arc::clone(&navigation_target_clone);
             let webrtc_link_clone = Arc::clone(&webrtc_link_clone_for_msg);
             let config_clone = Arc::clone(&config_clone);
             let config_path_clone = config_path.clone();
@@ -333,7 +337,108 @@ pub async fn start(args: StartArgs) -> Result<()> {
                             }
                         }
                     }
+                    AgentMessage::NavigationStart(payload) => {
+                        let corr_id = payload.correlation_id.clone();
+                        let nav_start_result = {
+                            let nav = navigation_target_clone.lock().await;
+                            let locs = locations_clone.lock().await;
+                            start_navigation(&nav, &locs, &payload.name)
+                        };
+                        match nav_start_result {
+                            Ok((new_nav, location)) => {
+                                *navigation_target_clone.lock().await = new_nav;
+                                if let Err(e) = bridge_clone
+                                    .lock()
+                                    .await
+                                    .post_navigation_goal(&location)
+                                    .await
+                                {
+                                    error!("Failed to post navigation goal: {}", e);
+                                }
+                                let response_envelope =
+                                    AgentMessage::navigation_response(
+                                        NavigationStatus::Started,
+                                        &payload.name,
+                                        None,
+                                        corr_id.as_deref(),
+                                    )
+                                    .to_message();
+                                send_webrtc_message(
+                                    &webrtc_link_clone,
+                                    &response_envelope,
+                                    "send navigation start response",
+                                )
+                                .await;
+                            }
+                            Err(ref err) => {
+                                let (code, details) =
+                                    err.to_error_code_and_details("start");
+                                let err_envelope = AgentMessage::error(
+                                    code,
+                                    &err.to_string(),
+                                    corr_id.as_deref(),
+                                    Some(details),
+                                )
+                                .to_message();
+                                send_webrtc_message(
+                                    &webrtc_link_clone,
+                                    &err_envelope,
+                                    "send navigation start error",
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    AgentMessage::NavigationCancel(payload) => {
+                        let corr_id = payload.correlation_id.clone();
+                        let nav_cancel_result = {
+                            let nav = navigation_target_clone.lock().await;
+                            cancel_navigation(&nav)
+                        };
+                        match nav_cancel_result {
+                            Ok((new_nav, cancelled_name)) => {
+                                *navigation_target_clone.lock().await = new_nav;
+                                if let Err(e) =
+                                    bridge_clone.lock().await.cancel_navigation().await
+                                {
+                                    error!("Failed to cancel navigation: {}", e);
+                                }
+                                let response_envelope =
+                                    AgentMessage::navigation_response(
+                                        NavigationStatus::Cancelled,
+                                        &cancelled_name,
+                                        None,
+                                        corr_id.as_deref(),
+                                    )
+                                    .to_message();
+                                send_webrtc_message(
+                                    &webrtc_link_clone,
+                                    &response_envelope,
+                                    "send navigation cancel response",
+                                )
+                                .await;
+                            }
+                            Err(ref err) => {
+                                let (code, details) =
+                                    err.to_error_code_and_details("cancel");
+                                let err_envelope = AgentMessage::error(
+                                    code,
+                                    &err.to_string(),
+                                    corr_id.as_deref(),
+                                    Some(details),
+                                )
+                                .to_message();
+                                send_webrtc_message(
+                                    &webrtc_link_clone,
+                                    &err_envelope,
+                                    "send navigation cancel error",
+                                )
+                                .await;
+                            }
+                        }
+                    }
                     AgentMessage::LocationResponse(_)
+                    | AgentMessage::NavigationResponse(_)
                     | AgentMessage::Ping(_)
                     | AgentMessage::Pong(_)
                     | AgentMessage::Capabilities(_)

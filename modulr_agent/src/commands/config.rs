@@ -88,6 +88,90 @@ impl LocationError {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum NavigationError {
+    #[error("navigation already active to '{0}'")]
+    AlreadyActive(String),
+    #[error("no navigation is active")]
+    NotActive,
+    #[error("location '{0}' not found")]
+    LocationNotFound(String),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigationErrorDetails {
+    pub operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_target: Option<String>,
+}
+
+impl NavigationError {
+    pub fn to_error_code_and_details(
+        &self,
+        operation: &str,
+    ) -> (modulr_webrtc_message::AgentErrorCode, serde_json::Value) {
+        let (code, details) = match self {
+            NavigationError::AlreadyActive(name) => (
+                modulr_webrtc_message::AgentErrorCode::NavigationAlreadyActive,
+                NavigationErrorDetails {
+                    operation: operation.to_string(),
+                    requested_name: None,
+                    current_target: Some(name.clone()),
+                },
+            ),
+            NavigationError::NotActive => (
+                modulr_webrtc_message::AgentErrorCode::NavigationNotActive,
+                NavigationErrorDetails {
+                    operation: operation.to_string(),
+                    requested_name: None,
+                    current_target: None,
+                },
+            ),
+            NavigationError::LocationNotFound(name) => (
+                modulr_webrtc_message::AgentErrorCode::LocationNotFound,
+                NavigationErrorDetails {
+                    operation: operation.to_string(),
+                    requested_name: Some(name.clone()),
+                    current_target: None,
+                },
+            ),
+        };
+        (
+            code,
+            serde_json::to_value(details)
+                .expect("NavigationErrorDetails serialization is infallible"),
+        )
+    }
+}
+
+pub fn start_navigation(
+    navigation_target: &Option<String>,
+    locations: &[Location],
+    name: &str,
+) -> Result<(Option<String>, Location), NavigationError> {
+    if let Some(current) = navigation_target.as_deref() {
+        return Err(NavigationError::AlreadyActive(current.to_string()));
+    }
+    let location = locations
+        .iter()
+        .find(|l| l.name == name)
+        .cloned()
+        .ok_or_else(|| NavigationError::LocationNotFound(name.to_string()))?;
+    Ok((Some(name.to_string()), location))
+}
+
+pub fn cancel_navigation(
+    navigation_target: &Option<String>,
+) -> Result<(Option<String>, String), NavigationError> {
+    navigation_target
+        .as_deref()
+        .map(|name| (None, name.to_string()))
+        .ok_or(NavigationError::NotActive)
+}
+
 #[derive(Parser, Default, Debug, Clone, Serialize, Deserialize, PartialEq, ValueEnum)]
 pub enum VideoSource {
     #[default]
