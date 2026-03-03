@@ -2,7 +2,7 @@ use crate::{
     commands::config::ImageFormat,
     ros_bridge::{OnCameraImageHdlrFn, RosBridgeError},
 };
-use modulr_webrtc_message::MovementCommand;
+use modulr_webrtc_message::{Location, MovementCommand};
 
 use async_trait::async_trait;
 
@@ -17,4 +17,6 @@ pub trait RosBridge: Send {
     /// If `image_format` is `Some`, video subscription will be enabled using the specified format.
     /// If `None`, video subscription is disabled.
     async fn launch(&self, image_format: Option<ImageFormat>) -> Result<(), RosBridgeError>;
+    async fn post_navigation_goal(&mut self, location: &Location) -> Result<(), RosBridgeError>;
+    async fn cancel_navigation(&mut self) -> Result<(), RosBridgeError>;
 }
