@@ -123,6 +123,28 @@ pub struct RegisterPayload {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PkiChallengePayload {
+    pub challenge: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PkiResponsePayload {
+    #[serde(skip)]
+    pub correlation_id: String,
+    pub signature: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PkiVerifiedPayload {
+    #[serde(skip)]
+    pub correlation_id: String,
+    pub agent_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum SignalingMessage {
     Answer(AnswerPayload),
     Capabilities(CapabilitiesPayload),
@@ -132,6 +154,9 @@ pub enum SignalingMessage {
     IceCandidate(IceCandidatePayload),
     Offer(OfferPayload),
     Register(RegisterPayload),
+    PkiChallenge(PkiChallengePayload),
+    PkiResponse(PkiResponsePayload),
+    PkiVerified(PkiVerifiedPayload),
 }
 
 impl MessageFields for SignalingMessage {
@@ -145,13 +170,19 @@ impl MessageFields for SignalingMessage {
             SignalingMessage::IceCandidate(_) => "signalling.ice_candidate",
             SignalingMessage::Offer(_) => "signalling.offer",
             SignalingMessage::Register(_) => "signalling.register",
+            SignalingMessage::PkiChallenge(_) => "signalling.pki_challenge",
+            SignalingMessage::PkiResponse(_) => "signalling.pki_response",
+            SignalingMessage::PkiVerified(_) => "signalling.pki_verified",
         }
         .to_string()
     }
 
     fn correlation_id(&self) -> Option<String> {
-        // No messages provide a correlation ID
-        None
+        match self {
+            SignalingMessage::PkiResponse(response) => Some(response.correlation_id.to_string()),
+            SignalingMessage::PkiVerified(response) => Some(response.correlation_id.to_string()),
+            _ => None,
+        }
     }
 
     fn payload(&self) -> Option<serde_json::Value> {
@@ -164,6 +195,9 @@ impl MessageFields for SignalingMessage {
             SignalingMessage::IceCandidate(payload) => serde_json::to_value(payload).ok(),
             SignalingMessage::Offer(payload) => serde_json::to_value(payload).ok(),
             SignalingMessage::Register(payload) => serde_json::to_value(payload).ok(),
+            SignalingMessage::PkiChallenge(payload) => serde_json::to_value(payload).ok(),
+            SignalingMessage::PkiResponse(payload) => serde_json::to_value(payload).ok(),
+            SignalingMessage::PkiVerified(payload) => serde_json::to_value(payload).ok(),
         }
     }
 
@@ -313,6 +347,94 @@ impl SignalingMessage {
                         reason: e.to_string(),
                     })?;
                 Ok(SignalingMessage::Register(register_payload))
+            }
+
+            "signalling.pki_challenge" => {
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .ok_or(MessageEnvelopeError::MissingFields {
+                        fields: vec!["payload".to_string()],
+                    })?;
+                let challenge_payload: PkiChallengePayload =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                Ok(SignalingMessage::PkiChallenge(challenge_payload))
+            }
+
+            "signalling.pki_response" => {
+                let mut missing_fields = vec![];
+                if msg.correlation_id.is_none() {
+                    missing_fields.push("correlationId".to_string());
+                }
+                if msg.payload.is_none() {
+                    missing_fields.push("payload".to_string());
+                }
+                if !missing_fields.is_empty() {
+                    return Err(MessageEnvelopeError::MissingFields {
+                        fields: missing_fields,
+                    });
+                }
+
+                let correlation_id = msg
+                    .correlation_id
+                    .as_ref()
+                    .expect("Failed to retrieve correlation ID despite checking field is present!");
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .expect("Failed to retrieve payload despite checking field is present!");
+
+                let signature =
+                    payload["signature"]
+                        .as_str()
+                        .ok_or(MessageEnvelopeError::MissingFields {
+                            fields: vec!["signature".to_string()],
+                        })?;
+
+                let response_payload = PkiResponsePayload {
+                    correlation_id: correlation_id.clone(),
+                    signature: signature.to_string(),
+                };
+
+                Ok(SignalingMessage::PkiResponse(response_payload))
+            }
+
+            "signalling.pki_verified" => {
+                let mut missing_fields = vec![];
+                if msg.correlation_id.is_none() {
+                    missing_fields.push("correlationId".to_string());
+                }
+                if msg.payload.is_none() {
+                    missing_fields.push("payload".to_string());
+                }
+                if !missing_fields.is_empty() {
+                    return Err(MessageEnvelopeError::MissingFields {
+                        fields: missing_fields,
+                    });
+                }
+
+                let correlation_id = msg
+                    .correlation_id
+                    .as_ref()
+                    .expect("Failed to retrieve correlation ID despite checking field is present!");
+                let payload = msg
+                    .payload
+                    .as_ref()
+                    .expect("Failed to retrieve payload despite checking field is present!");
+
+                let mut verified_payload: PkiVerifiedPayload =
+                    serde_json::from_value(payload.clone()).map_err(|e| {
+                        MessageEnvelopeError::JsonParse {
+                            reason: e.to_string(),
+                        }
+                    })?;
+                verified_payload.correlation_id = correlation_id.clone();
+
+                Ok(SignalingMessage::PkiVerified(verified_payload))
             }
 
             _ => Err(MessageEnvelopeError::UnknownMessageType {
@@ -952,7 +1074,270 @@ mod tests {
         ));
     }
 
+    // --- PkiChallenge tests ---
+
+    #[test]
+    fn test_pki_challenge_serialises_correctly() {
+        let msg = SignalingMessage::PkiChallenge(PkiChallengePayload {
+            challenge: "abc123".to_string(),
+        });
+        let envelope = msg.to_message();
+        assert_eq!(envelope.message_type, "signalling.pki_challenge");
+        assert!(envelope.correlation_id.is_none());
+        let payload = envelope.payload.unwrap();
+        assert_eq!(payload["challenge"], "abc123");
+    }
+
+    #[test]
+    fn test_pki_challenge_parses_correctly() {
+        let envelope = make_envelope(
+            "signalling.pki_challenge",
+            Some(json!({ "challenge": "server-nonce-xyz" })),
+        );
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        match msg {
+            SignalingMessage::PkiChallenge(c) => {
+                assert_eq!(c.challenge, "server-nonce-xyz");
+            }
+            other => panic!("Expected PkiChallenge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_challenge_missing_payload_returns_error() {
+        let envelope = make_envelope("signalling.pki_challenge", None);
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::MissingFields { .. }));
+    }
+
+    #[test]
+    fn test_pki_challenge_missing_challenge_returns_error() {
+        let envelope = make_envelope("signalling.pki_challenge", Some(json!({})));
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::JsonParse { .. }));
+    }
+
+    // --- PkiResponse tests ---
+
+    #[test]
+    fn test_pki_response_serialises_correctly() {
+        let msg = SignalingMessage::PkiResponse(PkiResponsePayload {
+            correlation_id: "challenge-id-1".to_string(),
+            signature: "c2lnbmVk".to_string(),
+        });
+        let envelope = msg.to_message();
+        assert_eq!(envelope.message_type, "signalling.pki_response");
+        assert_eq!(envelope.correlation_id.unwrap(), "challenge-id-1");
+        let payload = envelope.payload.unwrap();
+        assert_eq!(payload["signature"], "c2lnbmVk");
+        // correlation_id should NOT appear in the payload (serde skip)
+        assert!(payload.get("correlationId").is_none());
+    }
+
+    #[test]
+    fn test_pki_response_parses_correctly() {
+        let mut envelope = make_envelope(
+            "signalling.pki_response",
+            Some(json!({ "signature": "c2lnbmVk" })),
+        );
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        match msg {
+            SignalingMessage::PkiResponse(r) => {
+                assert_eq!(r.correlation_id, "challenge-id-1");
+                assert_eq!(r.signature, "c2lnbmVk");
+            }
+            other => panic!("Expected PkiResponse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_response_missing_correlation_id_returns_error() {
+        let envelope = make_envelope(
+            "signalling.pki_response",
+            Some(json!({ "signature": "c2lnbmVk" })),
+        );
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"correlationId".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_response_missing_payload_returns_error() {
+        let mut envelope = make_envelope("signalling.pki_response", None);
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"payload".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_response_missing_both_returns_error_with_both_fields() {
+        let envelope = make_envelope("signalling.pki_response", None);
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"correlationId".to_string()));
+                assert!(fields.contains(&"payload".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_response_missing_signature_returns_error() {
+        let mut envelope =
+            make_envelope("signalling.pki_response", Some(json!({ "other": "field" })));
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::MissingFields { .. }));
+    }
+
+    // --- PkiVerified tests ---
+
+    #[test]
+    fn test_pki_verified_serialises_correctly() {
+        let msg = SignalingMessage::PkiVerified(PkiVerifiedPayload {
+            correlation_id: "challenge-id-1".to_string(),
+            agent_id: "agent-42".to_string(),
+        });
+        let envelope = msg.to_message();
+        assert_eq!(envelope.message_type, "signalling.pki_verified");
+        assert_eq!(envelope.correlation_id.unwrap(), "challenge-id-1");
+        let payload = envelope.payload.unwrap();
+        assert_eq!(payload["agentId"], "agent-42");
+        // correlation_id should NOT appear in the payload (serde skip)
+        assert!(payload.get("correlationId").is_none());
+    }
+
+    #[test]
+    fn test_pki_verified_parses_correctly() {
+        let mut envelope = make_envelope(
+            "signalling.pki_verified",
+            Some(json!({ "agentId": "agent-42" })),
+        );
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let msg = SignalingMessage::from_message(&envelope).unwrap();
+        match msg {
+            SignalingMessage::PkiVerified(v) => {
+                assert_eq!(v.correlation_id, "challenge-id-1");
+                assert_eq!(v.agent_id, "agent-42");
+            }
+            other => panic!("Expected PkiVerified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_verified_missing_correlation_id_returns_error() {
+        let envelope = make_envelope(
+            "signalling.pki_verified",
+            Some(json!({ "agentId": "agent-42" })),
+        );
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"correlationId".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_verified_missing_payload_returns_error() {
+        let mut envelope = make_envelope("signalling.pki_verified", None);
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"payload".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_verified_missing_both_returns_error_with_both_fields() {
+        let envelope = make_envelope("signalling.pki_verified", None);
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        match err {
+            MessageEnvelopeError::MissingFields { fields } => {
+                assert!(fields.contains(&"correlationId".to_string()));
+                assert!(fields.contains(&"payload".to_string()));
+            }
+            other => panic!("Expected MissingFields, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_verified_missing_agent_id_returns_error() {
+        let mut envelope =
+            make_envelope("signalling.pki_verified", Some(json!({ "other": "field" })));
+        envelope.correlation_id = Some("challenge-id-1".to_string());
+        let err = SignalingMessage::from_message(&envelope).unwrap_err();
+        assert!(matches!(err, MessageEnvelopeError::JsonParse { .. }));
+    }
+
     // --- Round-trip tests ---
+
+    #[test]
+    fn test_pki_verified_round_trip() {
+        let original = SignalingMessage::PkiVerified(PkiVerifiedPayload {
+            correlation_id: "challenge-id-1".to_string(),
+            agent_id: "agent-42".to_string(),
+        });
+        let json_str = original.to_message().to_string().unwrap();
+        let envelope = MessageEnvelope::from_str(&json_str).unwrap();
+        let parsed = SignalingMessage::from_message(&envelope).unwrap();
+        match parsed {
+            SignalingMessage::PkiVerified(v) => {
+                assert_eq!(v.correlation_id, "challenge-id-1");
+                assert_eq!(v.agent_id, "agent-42");
+            }
+            other => panic!("Expected PkiVerified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_challenge_round_trip() {
+        let original = SignalingMessage::PkiChallenge(PkiChallengePayload {
+            challenge: "server-nonce-xyz".to_string(),
+        });
+        let json_str = original.to_message().to_string().unwrap();
+        let envelope = MessageEnvelope::from_str(&json_str).unwrap();
+        let parsed = SignalingMessage::from_message(&envelope).unwrap();
+        match parsed {
+            SignalingMessage::PkiChallenge(c) => {
+                assert_eq!(c.challenge, "server-nonce-xyz");
+            }
+            other => panic!("Expected PkiChallenge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pki_response_round_trip() {
+        let original = SignalingMessage::PkiResponse(PkiResponsePayload {
+            correlation_id: "challenge-id-1".to_string(),
+            signature: "c2lnbmVk".to_string(),
+        });
+        let json_str = original.to_message().to_string().unwrap();
+        let envelope = MessageEnvelope::from_str(&json_str).unwrap();
+        let parsed = SignalingMessage::from_message(&envelope).unwrap();
+        match parsed {
+            SignalingMessage::PkiResponse(r) => {
+                assert_eq!(r.correlation_id, "challenge-id-1");
+                assert_eq!(r.signature, "c2lnbmVk");
+            }
+            other => panic!("Expected PkiResponse, got {:?}", other),
+        }
+    }
 
     #[test]
     fn test_register_round_trip() {

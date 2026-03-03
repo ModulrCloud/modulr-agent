@@ -11,6 +11,7 @@ use crate::commands::config::{
     ImageFormat, VideoSource, cancel_navigation, create_location, delete_location, read_config,
     start_navigation, update_location,
 };
+use crate::commands::keys::load_signing_key;
 use crate::ros_bridge::Ros1Bridge;
 use crate::ros_bridge::Ros2Bridge;
 use crate::ros_bridge::RosBridge;
@@ -133,6 +134,11 @@ async fn send_webrtc_message(
 pub async fn start(args: StartArgs) -> Result<()> {
     let config_path = args.config_override.clone();
     let mut config = read_config(args.config_override)?;
+    let signing_key = load_signing_key(&config_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to load signing key: {e}\n\nHave you run initial-setup with enrollment options? Check the Modulr robot registration workflow for more information."
+        )
+    })?;
 
     let robot_id = config.core.robot_id.clone();
     let signaling_url = config.core.signaling_url.clone();
@@ -147,6 +153,7 @@ pub async fn start(args: StartArgs) -> Result<()> {
         &robot_id,
         &signaling_url,
         args.allow_skip_cert_check,
+        signing_key,
     )));
     let pipeline = Arc::new(Mutex::new(VideoPipeline::new(image_format)));
 
