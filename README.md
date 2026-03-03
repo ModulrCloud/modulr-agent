@@ -76,12 +76,12 @@ docker run --rm \
     --signaling-url wss://your-signaling-server:8765 \
     --video-source ros
 
-# Run with camera device access
+# Run the full agent
 docker run -d \
   --name modulr-agent \
   --user $(id -u):$(id -g) \
   --network host \
-  --device /dev/video0:/dev/video0 \
+  --restart unless-stopped \
   -v $(pwd)/config:/etc/modulr_agent \
   ghcr.io/modulrcloud/modulr-agent:latest
 ```
@@ -110,14 +110,14 @@ docker run --rm \
     --signaling-url wss://your-signaling-server:8765 \
     --video-source ros
 
-# Run with hardware acceleration and camera access
+# Run with hardware acceleration
 docker run -d \
   --name modulr-agent \
   --runtime nvidia \
   --user $(id -u):$(id -g) \
   --group-add video \
   --network host \
-  --device /dev/video0:/dev/video0 \
+  --restart unless-stopped \
   -v $(pwd)/config:/etc/modulr_agent \
   ghcr.io/modulrcloud/modulr-agent:jetson-latest
 ```
