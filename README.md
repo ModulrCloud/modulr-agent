@@ -9,6 +9,123 @@ This is a Cargo workspace containing two crates:
 - **modulr_agent** - Main binary application for robot control and video streaming
 - **modulr_zenoh_interface** - Library crate for Zenoh-based video transport (optional)
 
+## Installation
+
+### Option 1: APT Repository (Recommended)
+
+Add the Modulr APT repository for automatic installs and updates:
+
+```bash
+# Add the repository signing key and source
+curl -fsSL https://d2zsrx00cso14v.cloudfront.net/gpg.key | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/modulr.gpg
+echo "deb [signed-by=/etc/apt/keyrings/modulr.gpg] https://d2zsrx00cso14v.cloudfront.net stable main" | \
+  sudo tee /etc/apt/sources.list.d/modulr.list
+
+# Install
+sudo apt update
+sudo apt install modulr-agent
+```
+
+Future updates are a single command:
+
+```bash
+sudo apt update && sudo apt upgrade
+```
+
+### Option 1b: Debian Package (Manual)
+
+Alternatively, download the `.deb` for your architecture from [GitHub Releases](https://github.com/ModulrCloud/modulr-agent/releases):
+
+```bash
+# Install the package (apt resolves GStreamer dependencies automatically)
+sudo dpkg -i modulr-agent_*.deb && sudo apt-get install -f
+
+# Run initial setup
+sudo modulr_agent initial-setup \
+  --config-override /etc/modulr_agent/config.json \
+  --robot-id YOUR_ROBOT_ID \
+  --signaling-url wss://your-signaling-server:8765 \
+  --video-source ros
+
+# Fix ownership so the modulr service user can read the config and keys
+sudo chown -R modulr:modulr /etc/modulr_agent
+
+# Enable and start the systemd service
+sudo systemctl enable --now modulr-agent
+
+# Check status
+sudo systemctl status modulr-agent
+```
+
+### Option 2: Docker
+
+```bash
+# Pull the image (multi-arch: amd64, arm64, armv7)
+docker pull ghcr.io/modulrcloud/modulr-agent:latest
+
+# Run initial setup to create a config file
+mkdir -p config
+docker run --rm \
+  --user $(id -u):$(id -g) \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:latest \
+  initial-setup \
+    --config-override /etc/modulr_agent/config.json \
+    --robot-id YOUR_ROBOT_ID \
+    --signaling-url wss://your-signaling-server:8765 \
+    --video-source ros
+
+# Run the full agent
+docker run -d \
+  --name modulr-agent \
+  --user $(id -u):$(id -g) \
+  --network host \
+  --restart unless-stopped \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:latest
+```
+
+> **Note**: `--network host` is recommended for WebRTC and ROS connectivity. Use `--device` to pass through cameras or serial ports. For broad hardware access on a dedicated robot, `--privileged` can be used instead of individual `--device` flags.
+
+### Option 2b: Docker (NVIDIA Jetson)
+
+A Jetson-specific image is available with NVIDIA GStreamer plugins for hardware-accelerated H.264 encoding. Requires JetPack 6.x (Orin platform) and the NVIDIA Container Runtime.
+
+```bash
+# Pull the Jetson image (arm64 only)
+docker pull ghcr.io/modulrcloud/modulr-agent:jetson-latest
+
+# Run initial setup
+mkdir -p config
+docker run --rm \
+  --runtime nvidia \
+  --user $(id -u):$(id -g) \
+  --group-add video \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:jetson-latest \
+  initial-setup \
+    --config-override /etc/modulr_agent/config.json \
+    --robot-id YOUR_ROBOT_ID \
+    --signaling-url wss://your-signaling-server:8765 \
+    --video-source ros
+
+# Run with hardware acceleration
+docker run -d \
+  --name modulr-agent \
+  --runtime nvidia \
+  --user $(id -u):$(id -g) \
+  --group-add video \
+  --network host \
+  --restart unless-stopped \
+  -v $(pwd)/config:/etc/modulr_agent \
+  ghcr.io/modulrcloud/modulr-agent:jetson-latest
+```
+
+> **Note**: The `--runtime nvidia` flag is required to access NVIDIA hardware acceleration. You can set it as the default runtime by adding `"default-runtime": "nvidia"` to `/etc/docker/daemon.json`. To target a specific JetPack version, use `--build-arg L4T_VERSION=r36.x.x` when building from source with `Dockerfile.jetson`.
+
+### Option 3: Build from Source
+
 ## Cloning the Package
 
 Use the following command to clone the package:

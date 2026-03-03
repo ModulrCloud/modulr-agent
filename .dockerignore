@@ -1,0 +1,8 @@
+target/
+.git/
+.github/
+.cross/
+modulr_agent/scripts/venv/
+lcov.info
+*.md
+LICENSE

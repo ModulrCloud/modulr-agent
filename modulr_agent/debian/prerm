@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        # Stop and disable the service if running
+        systemctl stop modulr-agent || true
+        systemctl disable modulr-agent || true
+        ;;
+esac
+
+#DEBHELPER#

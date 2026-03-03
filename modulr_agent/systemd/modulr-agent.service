@@ -1,0 +1,23 @@
+[Unit]
+Description=Modulr Robot Agent
+Documentation=https://github.com/ModulrCloud/modulr-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=modulr
+Group=modulr
+EnvironmentFile=-/etc/default/modulr-agent
+ExecStart=/usr/bin/modulr_agent start --config-override /etc/modulr_agent/config.json
+Restart=on-failure
+RestartSec=5
+
+# Require initial-setup to have been run before the service can start
+ConditionPathExists=/etc/modulr_agent/config.json
+
+# Allow access to video devices
+SupplementaryGroups=video
+
+[Install]
+WantedBy=multi-user.target

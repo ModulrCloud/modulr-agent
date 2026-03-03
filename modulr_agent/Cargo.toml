@@ -2,6 +2,11 @@
 name = "modulr_agent"
 version = "0.1.0"
 edition = "2024"
+description = "Modulr robot agent for WebRTC-based teleoperation"
+license = "MIT"
+authors = ["ModulrCloud"]
+homepage = "https://github.com/ModulrCloud/modulr-agent"
+repository = "https://github.com/ModulrCloud/modulr-agent"
 
 [dependencies]
 webrtc = "0.10"
@@ -36,6 +41,7 @@ uuid = { version = "1", features = ["v4"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"
@@ -43,3 +49,23 @@ tempfile = "3.23.0"
 [features]
 default = ["zenoh"]
 zenoh = ["modulr_zenoh_interface"]
+
+[package.metadata.deb]
+maintainer = "Modulr <dev@modulr.cloud>"
+copyright = "2024-2026 Modulr"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Robot agent for the Modulr teleoperations platform. \
+Provides WebRTC video streaming, ROS integration, and \
+optional Zenoh-based video transport."""
+section = "utils"
+priority = "optional"
+depends = "libgstreamer1.0-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, libgstrtspserver-1.0-0, libges-1.0-0, ca-certificates"
+assets = [
+    ["target/release/modulr_agent", "usr/bin/", "755"],
+    ["../README.md", "usr/share/doc/modulr_agent/README.md", "644"],
+    ["systemd/modulr-agent.service", "lib/systemd/system/modulr-agent.service", "644"],
+    ["systemd/modulr-agent.default", "etc/default/modulr-agent", "644"],
+]
+conf-files = ["/etc/default/modulr-agent"]
+maintainer-scripts = "debian/"
