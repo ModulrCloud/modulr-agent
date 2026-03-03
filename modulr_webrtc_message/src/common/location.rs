@@ -1,28 +1,11 @@
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum LocationValidationError {
+    #[error("location name must not be empty")]
     NameEmpty,
+    #[error("location name '{0}' must not have leading or trailing whitespace")]
     NameWhitespace(String),
-}
-
-impl fmt::Display for LocationValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LocationValidationError::NameEmpty => {
-                write!(f, "location name must not be empty")
-            }
-            LocationValidationError::NameWhitespace(name) => {
-                write!(
-                    f,
-                    "location name '{}' must not have leading or trailing whitespace",
-                    name
-                )
-            }
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

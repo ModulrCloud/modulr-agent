@@ -23,7 +23,4 @@ pub enum MessageEnvelopeError {
 
     #[error("envelope validation failed: {reason}")]
     EnvelopeValidation { reason: String },
-
-    #[error("location validation failed: {reason}")]
-    LocationValidation { reason: String },
 }

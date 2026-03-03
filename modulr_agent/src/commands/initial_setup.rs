@@ -37,5 +37,5 @@ pub async fn initial_setup(args: InitialSetupArgs) -> Result<()> {
         },
         locations: vec![],
     };
-    write_config(&config, args.config_override)
+    Ok(write_config(&config, args.config_override)?)
 }

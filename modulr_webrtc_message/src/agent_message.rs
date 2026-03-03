@@ -166,6 +166,29 @@ impl AgentMessage {
         })
     }
 
+    #[allow(dead_code)]
+    pub fn movement_with_payload(payload: &MovementPayload) -> Self {
+        AgentMessage::Movement(payload.clone())
+    }
+
+    #[allow(dead_code)]
+    pub fn movement(forward: f64, turn: f64) -> Self {
+        AgentMessage::Movement(MovementPayload { forward, turn })
+    }
+
+    #[allow(dead_code)]
+    pub fn ping(correlation_id: &str) -> Self {
+        AgentMessage::Ping(PingPayload {
+            correlation_id: correlation_id.to_string(),
+        })
+    }
+
+    pub fn pong(correlation_id: &str) -> Self {
+        AgentMessage::Pong(PongPayload {
+            correlation_id: correlation_id.to_string(),
+        })
+    }
+
     pub fn error_from_envelope_error(
         err: &MessageEnvelopeError,
         correlation_id: Option<&str>,
@@ -199,35 +222,8 @@ impl AgentMessage {
                 ErrorCode::InvalidMessage,
                 format!("Envelope validation failed: {reason}"),
             ),
-            MessageEnvelopeError::LocationValidation { reason } => (
-                ErrorCode::LocationNameInvalid,
-                format!("Location validation failed: {reason}"),
-            ),
         };
         AgentMessage::error(code, &message, correlation_id, None)
-    }
-
-    #[allow(dead_code)]
-    pub fn movement_with_payload(payload: &MovementPayload) -> Self {
-        AgentMessage::Movement(payload.clone())
-    }
-
-    #[allow(dead_code)]
-    pub fn movement(forward: f64, turn: f64) -> Self {
-        AgentMessage::Movement(MovementPayload { forward, turn })
-    }
-
-    #[allow(dead_code)]
-    pub fn ping(correlation_id: &str) -> Self {
-        AgentMessage::Ping(PingPayload {
-            correlation_id: correlation_id.to_string(),
-        })
-    }
-
-    pub fn pong(correlation_id: &str) -> Self {
-        AgentMessage::Pong(PongPayload {
-            correlation_id: correlation_id.to_string(),
-        })
     }
 
     pub fn parse_error_response(reason: &str, correlation_id: Option<&str>) -> Self {
@@ -387,11 +383,6 @@ impl AgentMessage {
                         }
                     })?;
                 location.correlation_id = Some(msg.id.clone());
-                location
-                    .validate()
-                    .map_err(|e| MessageEnvelopeError::LocationValidation {
-                        reason: e.to_string(),
-                    })?;
                 if msg.message_type == "agent.location.create" {
                     Ok(AgentMessage::LocationCreate(location))
                 } else {

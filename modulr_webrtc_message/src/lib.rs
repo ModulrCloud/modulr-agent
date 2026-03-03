@@ -7,8 +7,8 @@ pub use agent_message::{
     LocationResponsePayload, MovementCommand, PingPayload,
 };
 pub use common::{
-    Location, MessageEnvelope, Orientation, PROTOCOL_VERSION, Position, SUPPORTED_VERSIONS,
-    ToMessage, validate_capabilities,
+    Location, LocationValidationError, MessageEnvelope, Orientation, PROTOCOL_VERSION, Position,
+    SUPPORTED_VERSIONS, ToMessage, validate_capabilities,
 };
 pub use signalling_message::{
     AnswerPayload, ConnectedPayload, DisconnectedPayload, DisconnectionReason,
